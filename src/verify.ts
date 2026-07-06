@@ -1,0 +1,617 @@
+/**
+ * @synoi/verify — pure verification helpers.
+ *
+ * Verifies SynOI Decision Receipts via Ed25519 against a published public key.
+ * Pure functions; no network I/O, no filesystem access. The CLI (cli.ts) is
+ * the thin fetch layer on top.
+ *
+ * CANONICALIZATION — ONE CANONICAL TRUTH (RFC 8785 JCS):
+ * The v1 canonical payload is produced by the SAME RFC 8785 (JCS) serializer
+ * the signer (@synoi/sraid `canonicalize`) uses, over the sorted scalar
+ * projection of the receipt. `jcsCanonicalize` below is a byte-for-byte port
+ * of @synoi/sraid/src/canonicalize.ts; the cross-package golden vectors in
+ * synoi-conformance (`cof/verify.canonical.v1.vectors.json`) PROVE the two
+ * emit identical bytes, and `selftest` re-checks them at runtime. It is a port
+ * (not an import) only because @synoi/sraid is ESM-only and the v1 path is a
+ * synchronous CommonJS API; the v2 path dynamic-imports @synoi/sraid directly.
+ *
+ * The signer (gateway verify-router.ts:canonicalPayload) signs a FLAT scalar
+ * projection via `JSON.stringify`. On scalar values V8's JSON.stringify and
+ * RFC 8785 JCS are byte-identical (JCS was specified to match ECMAScript string
+ * escaping and Number.toString), so JCS reproduces the signed bytes exactly.
+ * To keep that equivalence load-bearing, `canonicalPayload` REJECTS any
+ * canonical field whose value is a nested object or array: the signer never
+ * signs a non-scalar canonical field (e.g. policy_versions is signed as a JSON
+ * string), and JCS-sorting a nested object's keys would silently diverge from
+ * the signer's insertion-order JSON.stringify. Rejecting is fail-closed.
+ */
+
+import { verify, createPublicKey } from 'node:crypto'
+
+/**
+ * RFC 8785 (JCS) canonicalizer — a byte-for-byte port of
+ * @synoi/sraid/src/canonicalize.ts. This is the single canonicalization
+ * contract; any divergence from the sraid signer is a signature-confusion
+ * hazard, so the port is deliberate and pinned by cross-package golden vectors.
+ *
+ * Reject-loud: throws a TypeError for any non-JSON value (NaN/Infinity,
+ * undefined/function/symbol/bigint, objects with a toJSON()), matching sraid.
+ */
+export function jcsCanonicalize(value: unknown): string {
+  const t = typeof value
+
+  if (t === 'number') {
+    if (!isFinite(value as number)) {
+      throw new TypeError(
+        `jcsCanonicalize: RFC 8785 forbids non-finite numbers; received ${String(value)}`,
+      )
+    }
+    // ADR_019 decision 2: FORBID non-integer numbers everywhere. A number is
+    // legal iff it is a finite integer. This is a byte-for-byte port of
+    // @synoi/sraid canonicalize so the ONE canonical truth holds: a float that
+    // sraid rejects before hashing must be rejected here too, else the local
+    // canonicalizer would diverge and reintroduce the exact signature-confusion
+    // hazard this repo already fixed once. Represent fractional quantities as
+    // integer minor units (money) or integer millis (timestamps) before signing.
+    //
+    // -0: with floats forbidden, -0 can only arise as an explicit input;
+    // Number.isInteger(-0) is true and JSON.stringify(-0) === '0', so no special
+    // case is needed. This matches sraid, which deleted its former -0 branch.
+    if (!Number.isInteger(value as number)) {
+      throw new TypeError(
+        `jcsCanonicalize: non-integer numbers are forbidden (ADR_019); received ${String(value)}. ` +
+          'Represent fractional quantities as integer minor units (e.g. cents) before canonicalizing.',
+      )
+    }
+    return JSON.stringify(value)
+  }
+
+  if (value === null) return 'null'
+  if (t === 'string' || t === 'boolean') return JSON.stringify(value as string | boolean)
+
+  if (t === 'undefined' || t === 'function' || t === 'symbol' || t === 'bigint') {
+    throw new TypeError(
+      `jcsCanonicalize: value of type "${t}" is not a JSON value and cannot be canonicalized`,
+    )
+  }
+
+  if (Array.isArray(value)) {
+    const parts: string[] = []
+    for (let i = 0; i < value.length; i++) {
+      if (!(i in value)) {
+        throw new TypeError(
+          `jcsCanonicalize: sparse array hole at index ${i} is not a JSON value`,
+        )
+      }
+      parts.push(jcsCanonicalize(value[i]))
+    }
+    return '[' + parts.join(',') + ']'
+  }
+
+  if (typeof (value as { toJSON?: unknown }).toJSON === 'function') {
+    throw new TypeError(
+      'jcsCanonicalize: objects with a toJSON() method (e.g. Date) are not accepted; ' +
+        'serialize them to a JSON value (e.g. an ISO string) before canonicalizing',
+    )
+  }
+
+  const obj = value as Record<string, unknown>
+  const keys = Object.keys(obj)
+    .filter((k) => obj[k] !== undefined)
+    .sort()
+  return (
+    '{' +
+    keys.map((k) => JSON.stringify(k) + ':' + jcsCanonicalize(obj[k])).join(',') +
+    '}'
+  )
+}
+
+/**
+ * Required canonical fields, sorted alphabetically. Every receipt must
+ * include these for the signature to be reproducible.
+ */
+export const CANONICAL_FIELDS = [
+  'action_class',
+  'decision',
+  'oid_hex',
+  'receipt_id',
+  'recorded_at',
+  'risk_level',
+  'tenant_id',
+] as const
+
+/**
+ * Optional canonical fields added after the original scheme. Receipts MAY
+ * include these; if they do, they participate in the signature; if they
+ * don't, the canonical form omits them. This preserves backward-compat with
+ * receipts signed before the field was introduced.
+ *
+ * `gateway_manifest_sha256` was added 2026-05-19 (Sprint 1.2 of the
+ * RE-protection design) to cryptographically bind a receipt to the manifest
+ * hash of the gateway code that signed it.
+ */
+export const OPTIONAL_CANONICAL_FIELDS = [
+  'gateway_manifest_sha256',
+] as const
+
+export interface ReceiptPayload {
+  receipt_id:   string
+  tenant_id:    string
+  decision:     string
+  action_class: string
+  risk_level:   string
+  oid_hex:      string
+  recorded_at:  number
+}
+
+export interface VerifyResult {
+  valid:             boolean
+  canonical_payload: string
+  algorithm:         'Ed25519'
+  reason?:           string
+}
+
+/**
+ * Build the canonical JSON payload from a receipt body. The receipt may carry
+ * extra fields (intent_id, action_type, latency_ms, etc.) — only the canonical
+ * fields contribute to the signature.
+ *
+ * Throws if any REQUIRED canonical field is missing. Optional canonical fields
+ * (like gateway_manifest_sha256, introduced 2026-05-19) are included if
+ * present and omitted otherwise — this preserves verification of receipts
+ * signed before the optional fields existed.
+ */
+export function canonicalPayload(payload: Record<string, unknown>): string {
+  const obj: Record<string, unknown> = {}
+  const allKeys = [...CANONICAL_FIELDS, ...OPTIONAL_CANONICAL_FIELDS].sort()
+  for (const key of allKeys) {
+    const isRequired = (CANONICAL_FIELDS as readonly string[]).includes(key)
+    const val = payload[key]
+    // The gateway signer omits a canonical field that is absent OR explicitly
+    // null (verify-router.ts:canonicalPayload). Mirror that exactly so a
+    // receipt signed with a null authority field verifies whether the store
+    // returns the field as null or absent.
+    if (val === undefined || val === null) {
+      if (isRequired && val === undefined) {
+        throw new Error(`canonicalPayload: missing required field '${key}'`)
+      }
+      continue  // optional-absent, or any explicit-null → omitted (matches signer)
+    }
+    // Fail-closed: the signer only ever signs SCALAR canonical fields (strings,
+    // numbers, booleans). It serializes the flat projection with JSON.stringify,
+    // which preserves a nested object's INSERTION order; JCS below would SORT a
+    // nested object's keys, diverging from the signed bytes. A non-scalar
+    // canonical field therefore cannot be reproduced and MUST be rejected rather
+    // than silently verified against wrong bytes.
+    if (typeof val === 'object') {
+      throw new Error(
+        `canonicalPayload: canonical field '${key}' must be a scalar (string/number/boolean); ` +
+          `got ${Array.isArray(val) ? 'array' : 'object'}. The signer never signs a non-scalar ` +
+          `canonical field, so this receipt cannot be canonically reproduced.`,
+      )
+    }
+    obj[key] = val
+  }
+  // ONE canonical truth: RFC 8785 JCS, byte-identical to the @synoi/sraid
+  // signer. On the scalar projection above, JCS == the signer's JSON.stringify
+  // (proven by synoi-conformance cof/verify.canonical.v1.vectors.json).
+  return jcsCanonicalize(obj)
+}
+
+/**
+ * Verify a receipt's Ed25519 signature against a PEM-encoded public key.
+ *
+ * @param payload   the receipt fields (must include all CANONICAL_FIELDS)
+ * @param signatureHex  64-byte Ed25519 signature, hex-encoded
+ * @param publicKeyPem  the gateway's public key in PEM/SPKI format
+ *
+ * Returns `{ valid: true }` on a verified signature, or
+ * `{ valid: false, reason: '...' }` on any failure. Never throws.
+ */
+export function verifyReceiptSignature(
+  payload:       Record<string, unknown>,
+  signatureHex:  string,
+  publicKeyPem:  string,
+): VerifyResult {
+  let canonical: string
+  try {
+    canonical = canonicalPayload(payload)
+  } catch (err) {
+    return {
+      valid:             false,
+      canonical_payload: '',
+      algorithm:         'Ed25519',
+      reason:            (err as Error).message,
+    }
+  }
+
+  if (!/^[0-9a-fA-F]{128}$/.test(signatureHex)) {
+    return {
+      valid:             false,
+      canonical_payload: canonical,
+      algorithm:         'Ed25519',
+      reason:            `signature must be 128 hex chars (64 bytes Ed25519); got ${signatureHex.length}`,
+    }
+  }
+
+  try {
+    const keyObj = createPublicKey({ key: publicKeyPem, format: 'pem' })
+    const ok = verify(
+      null,
+      Buffer.from(canonical, 'utf8'),
+      keyObj,
+      Buffer.from(signatureHex, 'hex'),
+    )
+    return {
+      valid:             ok,
+      canonical_payload: canonical,
+      algorithm:         'Ed25519',
+      reason:            ok ? undefined : 'signature does not match canonical payload under this public key',
+    }
+  } catch (err) {
+    return {
+      valid:             false,
+      canonical_payload: canonical,
+      algorithm:         'Ed25519',
+      reason:            (err as Error).message,
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S2.3 — 2-receipt denial-then-execution chain render contract.
+//
+// When E1 carries `body.replayed_after`, the verifier MUST surface the D1 -> E1
+// chain so the operator can confirm: "denied at T0, HITL approved at T1,
+// executed at T2." This function is the render hook for that chain.
+//
+// NON-CLAIM discipline: the render output uses "denial-then-execution chain"
+// language, NOT "Replay Approval". ADR_007 governs if/when external framing
+// changes. See Section 17 of STEVE_DEMO_FALSIFICATION v2 doc for rationale.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ReplayChainLink {
+  /** The denial receipt D1 (status=denied, no replayed_after). */
+  denial:    Record<string, unknown>
+  /** The execution receipt E1 (status=ok, body.replayed_after=D1.oid). */
+  execution: Record<string, unknown>
+  /** True when E1.prev === D1.oid (Merkle parent edge is present and correct). */
+  merkle_edge_valid: boolean
+  /** True when E1.body.replayed_after === D1.oid. */
+  replayed_after_valid: boolean
+  /**
+   * HITL signal OID extracted from E1.body.detail when present.
+   * Format: `hitl_approval_signal_oid=<oid>` in the detail string.
+   */
+  hitl_signal_oid?: string
+}
+
+/**
+ * Render the D1 -> E1 2-receipt chain for display.
+ *
+ * Validates structural integrity of the chain:
+ *   - E1.body.replayed_after must equal D1.oid
+ *   - E1.prev must equal D1.oid (Merkle parent edge)
+ *   - D1.body.status must be 'denied'
+ *   - E1.body.status must be 'ok'
+ *
+ * Returns null with a reason string if E1 does not carry a replayed_after.
+ * Never throws.
+ *
+ * Callers should call this in their receipt render path when the receipt
+ * carries `body.replayed_after`. The render result is informational: it does
+ * not re-verify cryptographic signatures (use verifyReceiptSignature / v2 for
+ * that). Structural validation here ensures the chain references are consistent
+ * before surfacing them to the operator.
+ */
+export function renderReplayChain(
+  e1: Record<string, unknown>,
+  d1: Record<string, unknown>,
+): { ok: true; chain: ReplayChainLink } | { ok: false; reason: string } {
+  // Extract body fields safely.
+  const e1Body = (e1['body'] ?? {}) as Record<string, unknown>
+  const d1Body = (d1['body'] ?? {}) as Record<string, unknown>
+
+  const replayedAfter = e1Body['replayed_after']
+  if (replayedAfter === undefined || replayedAfter === null) {
+    return { ok: false, reason: 'E1 does not carry replayed_after -- not a 2-receipt chain' }
+  }
+
+  const d1Oid = d1['oid'] as string | undefined
+  if (typeof d1Oid !== 'string' || d1Oid === '') {
+    return { ok: false, reason: 'D1 has no oid field' }
+  }
+
+  const e1Prev = e1['prev'] as string | undefined
+  const merkle_edge_valid    = e1Prev === d1Oid
+  const replayed_after_valid = replayedAfter === d1Oid
+
+  // Extract HITL signal OID from detail string when present.
+  let hitl_signal_oid: string | undefined
+  const detail = typeof e1Body['detail'] === 'string' ? e1Body['detail'] : ''
+  const m = /hitl_approval_signal_oid=(\S+)/.exec(detail)
+  if (m !== null && m[1] !== undefined) hitl_signal_oid = m[1]
+
+  const chain: ReplayChainLink = {
+    denial:    d1,
+    execution: e1,
+    merkle_edge_valid,
+    replayed_after_valid,
+    ...(hitl_signal_oid !== undefined ? { hitl_signal_oid } : {}),
+  }
+
+  return { ok: true, chain }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Receipt v2 — hybrid DSSE verification (Ed25519 + ML-DSA-65, both required).
+//
+// v1 (above) is Ed25519-only over a flat canonical-field projection. v2 carries
+// a detached DSSE AttestationEnvelope (the receipt's `attestation` field) signed
+// over PAE(payloadType, canonicalize(content_core)). The verifier requires BOTH
+// an ed25519 AND an ml-dsa-65 signature to verify — this is the hybrid
+// classical + post-quantum guarantee, and it closes the sign-PQ vs verify-PQ
+// asymmetry (a v2 receipt missing or carrying an invalid ML-DSA-65 signature is
+// REJECTED, not silently accepted on the Ed25519 signature alone).
+//
+// The canonicalization and the DSSE/PAE verification both come from
+// @synoi/sraid — the ONE canonical truth (RFC 8785 JCS). This package does not
+// re-implement canonicalize/PAE; divergent canonicalizers are a signature-
+// confusion hazard and are deliberately avoided.
+//
+// @synoi/sraid is ESM-only ("type":"module"); @synoi/verify is CommonJS.
+// verifyReceiptV2 is async and dynamic-imports @synoi/sraid, so the ESM contact
+// is confined to one function and the v1 path stays fully synchronous and
+// byte-for-byte unchanged.
+//
+// Runtime floor: under "module":"commonjs" the TypeScript compiler downlevels
+// `await import(...)` to `require(...)` of the ESM module. Node loads an ESM
+// module from `require()` on Node >= 22 (the require(ESM) interop), and
+// @synoi/sraid already declares `engines.node >=22`, so the v2 path inherits
+// that Node 22+ floor. The v1 Ed25519-only path keeps the package's >=18 floor.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** receipt_scheme discriminator that selects the v2 hybrid DSSE path. */
+export const RECEIPT_SCHEME_V2 = 'synoi.receipt/v2'
+
+/**
+ * The DSSE payloadType for a SynOI SRAID object. Bound into the PAE, so a
+ * signature minted for a different payloadType will not verify. Matches
+ * AttestationEnvelope.payloadType in @synoi/sraid types.ts.
+ */
+export const V2_PAYLOAD_TYPE = 'application/vnd.synoi.gap+json' // migrated per ADR_007 payloadType split
+
+export interface VerifyResultV2 {
+  valid:              boolean
+  /**
+   * Failure reasons. Empty when valid. Includes the @synoi/sraid
+   * verifyAttestation reasons ('missing-ed25519', 'missing-ml-dsa-65',
+   * 'ed25519-invalid', 'ml-dsa-invalid', 'payload-type-mismatch',
+   * 'envelope-malformed', …) plus this package's binding checks
+   * ('missing-attestation', 'payload-core-mismatch').
+   */
+  reasons:            string[]
+  algorithm:          'DSSE(ed25519+ml-dsa-65)'
+  payload_type?:      string
+  /** The canonical content-core string that was verified (when computable). */
+  canonical_payload?: string
+}
+
+export interface VerifyReceiptV2Input {
+  /** The full v2 receipt object, carrying a DSSE `attestation` field. */
+  receipt:     Record<string, unknown>
+  /**
+   * RAW 32-byte Ed25519 public key. NOTE: v2 uses raw key bytes, NOT the PEM
+   * string the v1 path (`verifyReceiptSignature`) takes. The two schemes have
+   * different key shapes by design (raw is the @synoi/sraid verify surface).
+   */
+  ed25519_pub: Uint8Array
+  /** RAW 1952-byte ML-DSA-65 public key. */
+  ml_dsa_pub:  Uint8Array
+}
+
+const V2_ALGORITHM = 'DSSE(ed25519+ml-dsa-65)' as const
+
+/**
+ * Verify a Receipt v2 hybrid DSSE attestation.
+ *
+ * Two checks, in order:
+ *   1. Content-core bind — recompute `canonicalize(cdroContentCore(receipt))`
+ *      and assert it equals the envelope's `payload`. This binds the signed
+ *      envelope to the actual receipt body, so a validly-signed envelope cannot
+ *      be transplanted onto a different receipt body. Without this, a correct
+ *      signature over stale bytes would pass.
+ *   2. Hybrid signature verify — delegate to @synoi/sraid `verifyAttestation`,
+ *      which requires BOTH ed25519 and ml-dsa-65 to verify over the PAE and
+ *      pins the payloadType.
+ *
+ * Returns `valid: true` only when BOTH checks pass. Never throws.
+ */
+export async function verifyReceiptV2(
+  input: VerifyReceiptV2Input,
+): Promise<VerifyResultV2> {
+  // ESM-only package: dynamic import keeps this CJS package buildable/publishable.
+  const sraid = await import('@synoi/sraid')
+
+  const receipt = input.receipt
+  const envelope = receipt.attestation as
+    | { payloadType?: unknown; payload?: unknown; signatures?: unknown }
+    | undefined
+
+  if (
+    envelope === undefined ||
+    envelope === null ||
+    typeof envelope !== 'object'
+  ) {
+    return { valid: false, reasons: ['missing-attestation'], algorithm: V2_ALGORITHM }
+  }
+
+  // (1) Bind the envelope payload to the receipt content core.
+  let expected: string
+  try {
+    expected = sraid.canonicalize(sraid.cdroContentCore(receipt))
+  } catch (err) {
+    return {
+      valid:     false,
+      reasons:   ['content-core-uncanonicalizable: ' + (err as Error).message],
+      algorithm: V2_ALGORITHM,
+    }
+  }
+
+  if (envelope.payload !== expected) {
+    return {
+      valid:             false,
+      reasons:           ['payload-core-mismatch'],
+      algorithm:         V2_ALGORITHM,
+      canonical_payload: expected,
+    }
+  }
+
+  // (2) Hybrid DSSE verify (both ed25519 AND ml-dsa-65 required).
+  const res = sraid.verifyAttestation({
+    envelope:            envelope as Parameters<typeof sraid.verifyAttestation>[0]['envelope'],
+    ed25519_pub:         input.ed25519_pub,
+    ml_dsa_pub:          input.ml_dsa_pub,
+    expectedPayloadType: V2_PAYLOAD_TYPE,
+  })
+
+  return {
+    valid:             res.valid,
+    reasons:           res.reasons,
+    algorithm:         V2_ALGORITHM,
+    payload_type:      typeof envelope.payloadType === 'string' ? envelope.payloadType : undefined,
+    canonical_payload: expected,
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// verifyReceiptByScheme — the ONE fail-closed dispatcher (ADR_019 STEP 5).
+//
+// A receipt carries a `receipt_scheme` discriminator. This function reads it and
+// routes to exactly ONE verifier. It is the single entry point a consumer should
+// call so that scheme selection is not re-implemented (and mis-implemented) per
+// call site. The routing is FAIL-CLOSED by LOCKED founder decision (K2 now):
+//
+//   receipt_scheme === 'synoi.receipt/v2'  -> verifyReceiptV2 (hybrid DSSE path)
+//   receipt_scheme absent                  -> legacy v1 ONLY IF allowLegacyV1===true;
+//                                             otherwise FAIL-CLOSED (rejected)
+//   receipt_scheme any other value         -> FAIL-CLOSED (rejected)
+//
+// allowLegacyV1 DEFAULTS TO FALSE. A missing scheme is NOT silently trusted as
+// v1: an attacker who strips the discriminator to force the weaker Ed25519-only
+// path must be rejected unless the operator has EXPLICITLY opted into legacy
+// acceptance. This closes the "unknown/missing scheme falls through to the
+// weaker verifier" hazard.
+//
+// This dispatcher does NOT invent a new canonicalization or signature path: it
+// only selects between the two existing, vector-pinned verifiers above.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The v1 legacy key material + signature, supplied only when the caller opts
+ * into legacy verification (allowLegacyV1: true) AND the receipt carries no
+ * receipt_scheme. The v1 path is Ed25519-only over the flat canonical-field
+ * projection (verifyReceiptSignature).
+ */
+export interface LegacyV1VerifyInput {
+  /** Hex-encoded 64-byte Ed25519 signature over the v1 canonical payload. */
+  signatureHex: string
+  /** PEM/SPKI-encoded Ed25519 public key. */
+  publicKeyPem: string
+}
+
+export interface VerifyBySchemeInput {
+  /** The full receipt object. Its `receipt_scheme` field selects the verifier. */
+  receipt: Record<string, unknown>
+  /** RAW 32-byte Ed25519 public key for the v2 hybrid path. */
+  ed25519_pub?: Uint8Array
+  /** RAW 1952-byte ML-DSA-65 public key for the v2 hybrid path. */
+  ml_dsa_pub?: Uint8Array
+  /**
+   * Opt-in to the legacy v1 Ed25519-only path for a scheme-less receipt.
+   * DEFAULTS TO FALSE (LOCKED fail-closed decision, K2 enforcement now). When
+   * false, a receipt without a receipt_scheme is REJECTED, not verified as v1.
+   */
+  allowLegacyV1?: boolean
+  /** v1 key material + signature; required only when the v1 path is taken. */
+  legacy?: LegacyV1VerifyInput
+}
+
+export interface VerifyBySchemeResult {
+  valid: boolean
+  /** Which verifier the dispatcher selected, or 'rejected' when it fails closed. */
+  scheme: 'v2' | 'v1' | 'rejected'
+  /** Failure reasons (empty when valid). */
+  reasons: string[]
+  /** The underlying verifier result when one ran (v2 or v1); absent on fail-closed. */
+  detail?: VerifyResultV2 | VerifyResult
+}
+
+/**
+ * Route a receipt to its verifier by `receipt_scheme`, FAIL-CLOSED. Never throws.
+ *
+ * See the block comment above for the full routing table. Returns
+ * `scheme: 'rejected'` with a reason whenever the dispatcher fails closed
+ * (unknown scheme, or missing scheme with allowLegacyV1 not enabled).
+ */
+export async function verifyReceiptByScheme(
+  input: VerifyBySchemeInput,
+): Promise<VerifyBySchemeResult> {
+  const scheme = input.receipt['receipt_scheme']
+
+  // ── v2 hybrid DSSE path ────────────────────────────────────────────────────
+  if (scheme === RECEIPT_SCHEME_V2) {
+    if (input.ed25519_pub === undefined || input.ml_dsa_pub === undefined) {
+      return {
+        valid:   false,
+        scheme:  'rejected',
+        reasons: ['v2-scheme-requires-both-public-keys'],
+      }
+    }
+    const res = await verifyReceiptV2({
+      receipt:     input.receipt,
+      ed25519_pub: input.ed25519_pub,
+      ml_dsa_pub:  input.ml_dsa_pub,
+    })
+    return { valid: res.valid, scheme: 'v2', reasons: res.reasons, detail: res }
+  }
+
+  // ── missing scheme ─────────────────────────────────────────────────────────
+  // FAIL-CLOSED unless the operator EXPLICITLY opted into legacy v1 acceptance.
+  if (scheme === undefined || scheme === null) {
+    if (input.allowLegacyV1 !== true) {
+      return {
+        valid:   false,
+        scheme:  'rejected',
+        reasons: ['missing-receipt-scheme-and-legacy-v1-not-allowed'],
+      }
+    }
+    if (input.legacy === undefined) {
+      return {
+        valid:   false,
+        scheme:  'rejected',
+        reasons: ['legacy-v1-allowed-but-no-v1-key-material-supplied'],
+      }
+    }
+    const res = verifyReceiptSignature(
+      input.receipt,
+      input.legacy.signatureHex,
+      input.legacy.publicKeyPem,
+    )
+    return {
+      valid:   res.valid,
+      scheme:  'v1',
+      reasons: res.valid ? [] : [res.reason ?? 'v1-signature-invalid'],
+      detail:  res,
+    }
+  }
+
+  // ── any other value ────────────────────────────────────────────────────────
+  // Unknown scheme is ALWAYS fail-closed: a verifier that cannot reason about a
+  // scheme must reject it, never guess.
+  return {
+    valid:   false,
+    scheme:  'rejected',
+    reasons: [`unknown-receipt-scheme:${String(scheme)}`],
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "name": "@synoi/verify",
+  "version": "0.1.0",
+  "description": "Offline Ed25519 verifier for SynOI Decision Receipts. CLI + programmatic API. No network call required if you have the receipt JSON + the gateway's public key.",
+  "license": "Apache-2.0",
+  "homepage": "https://synoi.systems/products/receipts-verifier",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/synoi/synoi-verify.git"
+  },
+  "keywords": [
+    "synoi",
+    "receipts",
+    "ed25519",
+    "verify",
+    "audit",
+    "cryptography"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "commonjs",
+  "bin": {
+    "synoi-verify": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "tsx test/verify.test.ts && tsx test/canonical-parity.test.ts && tsx test/selftest.test.ts && tsx test/verify-v2.test.ts && tsx test/verify-by-scheme.test.ts && tsx test/merkle.test.ts && tsx test/countersign.test.ts && tsx test/recipe.test.ts && tsx test/fetch.test.ts && tsx test/replay-chain.test.ts && tsx test/source-cursor-render.test.ts && tsx test/cited-oracle-render.test.ts && tsx test/dual-signer-oid.test.ts && tsx test/bundle.test.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "files": [
+    "dist",
+    "vectors",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@synoi/sraid": "^0.2.0",
+    "@synoi/verify-core": "^0.1.0"
+  },
+  "devDependencies": {
+    "@noble/post-quantum": "^0.6.1",
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

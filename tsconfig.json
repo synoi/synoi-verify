@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "baseUrl": ".",
+    "paths": {
+      "@synoi/sraid": ["../synoi-sraid/dist/index.d.ts"],
+      "@synoi/verify-core": ["../synoi-verify-core/dist/index.d.ts"]
+    },
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "lib": ["es2023"],
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}
