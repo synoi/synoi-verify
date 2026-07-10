@@ -25,7 +25,7 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-  const out: Args = { gateway: 'http://localhost:3000', help: false, json: false, selftest: false, bundle: false }
+  const out: Args = { gateway: 'https://gateway.synoi.systems', help: false, json: false, selftest: false, bundle: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--help' || a === '-h')    { out.help = true; continue }
@@ -54,7 +54,8 @@ function printHelp(): void {
     '  npx @synoi/verify --help',
     '',
     'Options:',
-    '  --gateway, -g <url>   Gateway base URL (default: http://localhost:3000)',
+    '  --gateway, -g <url>   Gateway base URL (default: https://gateway.synoi.systems;',
+    '                        pass http://localhost:3000 for a local self-hosted gateway)',
     '  --json                Emit raw JSON result; suppress human-readable output',
     '  --help, -h            Show this message',
     '',

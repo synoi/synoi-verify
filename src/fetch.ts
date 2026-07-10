@@ -43,11 +43,11 @@ function ed25519KeyFingerprint(pem: string): string | undefined {
  * documented in the gateway's verify-router.ts.
  *
  * @param receiptId  receipt id (e.g. "rcpt_abc_123")
- * @param gateway    base URL — defaults to http://localhost:3000
+ * @param gateway    base URL — defaults to https://gateway.synoi.systems
  */
 export async function fetchAndVerify(
   receiptId: string,
-  gateway:   string = 'http://localhost:3000',
+  gateway:   string = 'https://gateway.synoi.systems',
 ): Promise<FetchAndVerifyResult> {
   const base = gateway.replace(/\/$/, '')
 
