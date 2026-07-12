@@ -19,12 +19,26 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "commonjs",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "browser": "./dist/browser.js",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "default": "./dist/browser.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "synoi-verify": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
-    "test": "tsx test/verify.test.ts && tsx test/canonical-parity.test.ts && tsx test/selftest.test.ts && tsx test/verify-v2.test.ts && tsx test/verify-gap-selfsign.test.ts && tsx test/verify-by-scheme.test.ts && tsx test/merkle.test.ts && tsx test/countersign.test.ts && tsx test/recipe.test.ts && tsx test/fetch.test.ts && tsx test/replay-chain.test.ts && tsx test/source-cursor-render.test.ts && tsx test/cited-oracle-render.test.ts && tsx test/dual-signer-oid.test.ts && tsx test/bundle.test.ts",
+    "test": "tsx test/verify.test.ts && tsx test/canonical-parity.test.ts && tsx test/selftest.test.ts && tsx test/verify-v2.test.ts && tsx test/verify-gap-selfsign.test.ts && tsx test/verify-by-scheme.test.ts && tsx test/merkle.test.ts && tsx test/countersign.test.ts && tsx test/recipe.test.ts && tsx test/fetch.test.ts && tsx test/replay-chain.test.ts && tsx test/source-cursor-render.test.ts && tsx test/cited-oracle-render.test.ts && tsx test/dual-signer-oid.test.ts && tsx test/bundle.test.ts && tsx test/browser-entry.test.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build && npm test"
   },
@@ -47,6 +61,7 @@
   "devDependencies": {
     "@noble/post-quantum": "^0.6.1",
     "@types/node": "^20.11.0",
+    "esbuild": "^0.28.0",
     "tsx": "^4.7.0",
     "typescript": "^5.4.0"
   }
