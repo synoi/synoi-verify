@@ -90,6 +90,26 @@ async function main(): Promise<void> {
   })
   ok('verifyGapSelfSignedReceipt: missing signature fails closed, does not throw', !res4.valid)
 
+  // 4b. Security F2 (2026-07-12 quality gate, fixed in @synoi/gap): an
+  //     oid/gap_version/supersedes rebind mismatch must be caught here too --
+  //     this is a DELEGATION test proving the fix in @synoi/gap's
+  //     verifyReceiptSignature is actually inherited by @synoi/verify's
+  //     gap-selfsign path, not re-implemented (and therefore not at risk of
+  //     silently NOT inheriting a future fix there).
+  const tamperedOidReceipt = { ...r.envelope, oid: 'sha256:' + 'ff'.repeat(32) }
+  const res4b = await verifyGapSelfSignedReceipt({
+    receipt: tamperedOidReceipt as unknown as Record<string, unknown>,
+    ed25519_pub: keyPair.publicKey,
+  })
+  ok('verifyGapSelfSignedReceipt: tampered oid fails verification (F2 fix inherited from @synoi/gap)', !res4b.valid)
+
+  const tamperedSupersedesReceipt = { ...r.envelope, supersedes: 'sha256:' + 'aa'.repeat(32) }
+  const res4c = await verifyGapSelfSignedReceipt({
+    receipt: tamperedSupersedesReceipt as unknown as Record<string, unknown>,
+    ed25519_pub: keyPair.publicKey,
+  })
+  ok('verifyGapSelfSignedReceipt: forged supersedes lineage edge fails verification (F2 fix inherited)', !res4c.valid)
+
   // 5. Dispatcher routes by receipt_scheme.
   const disp1 = await verifyReceiptByScheme({
     receipt: r.envelope as unknown as Record<string, unknown>,
