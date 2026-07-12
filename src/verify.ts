@@ -485,6 +485,69 @@ export async function verifyReceiptV2(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Receipt gap-selfsign — @synoi/gap `receipt()` single-Ed25519 self-sign tier
+// (ADR_014 Section 10.1, the public lite-daemon carve-out).
+//
+// This is a THIRD receipt tier, distinct from v1 legacy (flat CANONICAL_FIELDS
+// schema, an older pre-GAP scheme) and v2 hybrid DSSE (KMS/managed-custody,
+// Ed25519+ML-DSA-65 both required). The lite self-host daemon has neither a
+// legacy-flat-schema producer nor managed key custody: it self-signs a GAP CDRO
+// envelope with a single, operator-owned, locally-persisted Ed25519 key via
+// @synoi/gap's `receipt()`. This verifier is the OSS counterpart: it delegates
+// to @synoi/gap's OWN `verifyReceiptSignature` (same EXCLUDED_FIELDS set, same
+// canonicalize call) rather than re-implementing the exclusion set here — a
+// second hand-copied projection would silently drift from the signer on the
+// next spec tweak, which is exactly the signature-confusion hazard the v1/v2
+// canonicalization comments above warn about for every other tier.
+//
+// @synoi/gap is ESM-only ("type":"module"); @synoi/verify is CommonJS, same
+// constraint as the v2 @synoi/sraid dependency above. Dynamic import keeps
+// this function async and the v1 path fully synchronous and unchanged.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** receipt_scheme discriminator that selects the gap-selfsign verifier. */
+export const RECEIPT_SCHEME_GAP_SELFSIGN = 'synoi.receipt/gap-selfsign'
+
+export interface VerifyResultGapSelfSign {
+  valid:     boolean
+  reason?:   string
+  algorithm: 'Ed25519(gap-selfsign)'
+}
+
+export interface VerifyGapSelfSignedInput {
+  /** The full receipt envelope, as produced by @synoi/gap `receipt()`. */
+  receipt:     Record<string, unknown>
+  /** RAW 32-byte Ed25519 public key (the operator's own, self-hosted key). */
+  ed25519_pub: Uint8Array
+}
+
+/**
+ * Verify a receipt minted by @synoi/gap's `receipt()` self-sign one-liner.
+ * Delegates the actual signature check to @synoi/gap so there is exactly one
+ * implementation of the gap-selfsign exclusion-set + canonicalize scheme (in
+ * @synoi/gap itself); this function is a thin async adapter, not a second
+ * copy. Never throws.
+ */
+export async function verifyGapSelfSignedReceipt(
+  input: VerifyGapSelfSignedInput,
+): Promise<VerifyResultGapSelfSign> {
+  const algorithm = 'Ed25519(gap-selfsign)' as const
+  try {
+    // ESM-only package: dynamic import keeps this CJS package buildable/publishable.
+    const gap = await import('@synoi/gap')
+    const valid = gap.verifyReceiptSignature(
+      input.receipt as unknown as Parameters<typeof gap.verifyReceiptSignature>[0],
+      input.ed25519_pub,
+    )
+    return valid
+      ? { valid: true, algorithm }
+      : { valid: false, algorithm, reason: 'signature does not match canonical payload under this public key' }
+  } catch (err) {
+    return { valid: false, algorithm, reason: (err as Error).message }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // verifyReceiptByScheme — the ONE fail-closed dispatcher (ADR_019 STEP 5).
 //
 // A receipt carries a `receipt_scheme` discriminator. This function reads it and
@@ -492,10 +555,11 @@ export async function verifyReceiptV2(
 // call so that scheme selection is not re-implemented (and mis-implemented) per
 // call site. The routing is FAIL-CLOSED by LOCKED founder decision (K2 now):
 //
-//   receipt_scheme === 'synoi.receipt/v2'  -> verifyReceiptV2 (hybrid DSSE path)
-//   receipt_scheme absent                  -> legacy v1 ONLY IF allowLegacyV1===true;
-//                                             otherwise FAIL-CLOSED (rejected)
-//   receipt_scheme any other value         -> FAIL-CLOSED (rejected)
+//   receipt_scheme === 'synoi.receipt/v2'            -> verifyReceiptV2 (hybrid DSSE path)
+//   receipt_scheme === 'synoi.receipt/gap-selfsign'   -> verifyGapSelfSignedReceipt (lite self-sign path)
+//   receipt_scheme absent                             -> legacy v1 ONLY IF allowLegacyV1===true;
+//                                                        otherwise FAIL-CLOSED (rejected)
+//   receipt_scheme any other value                    -> FAIL-CLOSED (rejected)
 //
 // allowLegacyV1 DEFAULTS TO FALSE. A missing scheme is NOT silently trusted as
 // v1: an attacker who strips the discriminator to force the weaker Ed25519-only
@@ -504,7 +568,7 @@ export async function verifyReceiptV2(
 // weaker verifier" hazard.
 //
 // This dispatcher does NOT invent a new canonicalization or signature path: it
-// only selects between the two existing, vector-pinned verifiers above.
+// only selects between the three existing, vector-pinned verifiers above.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -528,6 +592,13 @@ export interface VerifyBySchemeInput {
   /** RAW 1952-byte ML-DSA-65 public key for the v2 hybrid path. */
   ml_dsa_pub?: Uint8Array
   /**
+   * RAW 32-byte Ed25519 public key for the gap-selfsign lite path. Distinct
+   * from `ed25519_pub` above (which is v2-hybrid-scoped) so a caller cannot
+   * accidentally satisfy the gap-selfsign branch with a key meant for v2, or
+   * vice versa; each tier states its own key requirement explicitly.
+   */
+  gap_ed25519_pub?: Uint8Array
+  /**
    * Opt-in to the legacy v1 Ed25519-only path for a scheme-less receipt.
    * DEFAULTS TO FALSE (LOCKED fail-closed decision, K2 enforcement now). When
    * false, a receipt without a receipt_scheme is REJECTED, not verified as v1.
@@ -540,11 +611,11 @@ export interface VerifyBySchemeInput {
 export interface VerifyBySchemeResult {
   valid: boolean
   /** Which verifier the dispatcher selected, or 'rejected' when it fails closed. */
-  scheme: 'v2' | 'v1' | 'rejected'
+  scheme: 'v2' | 'gap-selfsign' | 'v1' | 'rejected'
   /** Failure reasons (empty when valid). */
   reasons: string[]
-  /** The underlying verifier result when one ran (v2 or v1); absent on fail-closed. */
-  detail?: VerifyResultV2 | VerifyResult
+  /** The underlying verifier result when one ran; absent on fail-closed. */
+  detail?: VerifyResultV2 | VerifyResultGapSelfSign | VerifyResult
 }
 
 /**
@@ -574,6 +645,27 @@ export async function verifyReceiptByScheme(
       ml_dsa_pub:  input.ml_dsa_pub,
     })
     return { valid: res.valid, scheme: 'v2', reasons: res.reasons, detail: res }
+  }
+
+  // ── gap-selfsign lite path (ADR_014 Section 10.1) ──────────────────────────
+  if (scheme === RECEIPT_SCHEME_GAP_SELFSIGN) {
+    if (input.gap_ed25519_pub === undefined) {
+      return {
+        valid:   false,
+        scheme:  'rejected',
+        reasons: ['gap-selfsign-scheme-requires-ed25519-public-key'],
+      }
+    }
+    const res = await verifyGapSelfSignedReceipt({
+      receipt:     input.receipt,
+      ed25519_pub: input.gap_ed25519_pub,
+    })
+    return {
+      valid:   res.valid,
+      scheme:  'gap-selfsign',
+      reasons: res.valid ? [] : [res.reason ?? 'gap-selfsign-signature-invalid'],
+      detail:  res,
+    }
   }
 
   // ── missing scheme ─────────────────────────────────────────────────────────
