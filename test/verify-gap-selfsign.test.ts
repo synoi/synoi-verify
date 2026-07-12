@@ -26,7 +26,7 @@
  *   yarn test
  */
 
-import { receipt, generateReceiptKeyPair, verifyReceiptSignature as gapVerifyReceiptSignature, RECEIPT_SCHEME_GAP_SELFSIGN as GAP_RECEIPT_SCHEME_GAP_SELFSIGN } from '@synoi/gap'
+import { receipt, generateReceiptKeyPair, verifyReceiptSignature as gapVerifyReceiptSignature, computeGapOid, RECEIPT_SCHEME_GAP_SELFSIGN as GAP_RECEIPT_SCHEME_GAP_SELFSIGN } from '@synoi/gap'
 import {
   verifyGapSelfSignedReceipt,
   verifyReceiptByScheme,
@@ -109,6 +109,67 @@ async function main(): Promise<void> {
     ed25519_pub: keyPair.publicKey,
   })
   ok('verifyGapSelfSignedReceipt: forged supersedes lineage edge fails verification (F2 fix inherited)', !res4c.valid)
+
+  // 4d. ADVERSARY re-clear (2026-07-12): 4b/4c above only prove the LAZY
+  //     variant (mutate a field, leave oid stale). computeGapOid is a
+  //     PUBLIC, UNKEYED sha256 -- an attacker with no secret can mutate a
+  //     field, RECOMPUTE a matching oid, and reuse the ORIGINAL signature
+  //     bytes unchanged. Before @synoi/gap's EXCLUDED_FIELDS fix (bringing
+  //     gap_version/supersedes/signature_key_id into the signed payload),
+  //     this recompute-oid variant verified TRUE through this exact
+  //     delegation path -- the live attack the Adversary proved, not
+  //     defended by the oid-rebind check alone. Each variant here mutates a
+  //     field AND recomputes a matching oid the same way receipt() does,
+  //     then reuses the original signature; all three MUST fail through
+  //     @synoi/verify's delegated dispatcher, not just through @synoi/gap
+  //     directly (proving the fix is actually inherited, not merely present
+  //     upstream).
+  function recomputeOidFor(envelope: typeof r.envelope): string {
+    return computeGapOid({
+      type: envelope.type,
+      gap_version: envelope.gap_version,
+      receipt_scheme: envelope.receipt_scheme,
+      tenant_id: envelope.tenant_id,
+      created_at_ms: envelope.created_at_ms,
+      created_by: envelope.created_by,
+      body: envelope.body,
+      supersedes: envelope.supersedes,
+    })
+  }
+
+  const forgedGapVersion = { ...r.envelope, gap_version: '2.0' as unknown as typeof r.envelope.gap_version }
+  forgedGapVersion.oid = recomputeOidFor(forgedGapVersion)
+  const res4d = await verifyGapSelfSignedReceipt({
+    receipt: forgedGapVersion as unknown as Record<string, unknown>,
+    ed25519_pub: keyPair.publicKey,
+  })
+  ok('ADVERSARY (delegated): gap_version mutated + oid recomputed to match + original signature reused -> MUST fail',
+     !res4d.valid)
+
+  const forgedSupersedes = { ...r.envelope, supersedes: 'sha256:' + 'bb'.repeat(32) }
+  forgedSupersedes.oid = recomputeOidFor(forgedSupersedes)
+  const res4e = await verifyGapSelfSignedReceipt({
+    receipt: forgedSupersedes as unknown as Record<string, unknown>,
+    ed25519_pub: keyPair.publicKey,
+  })
+  ok('ADVERSARY (delegated): supersedes forged + oid recomputed to match + original signature reused -> MUST fail',
+     !res4e.valid)
+
+  const forgedKeyId = { ...r.envelope, signature_key_id: otherKeyPair.keyId ?? 'key:attacker-controlled' }
+  const res4f = await verifyGapSelfSignedReceipt({
+    receipt: forgedKeyId as unknown as Record<string, unknown>,
+    ed25519_pub: keyPair.publicKey,
+  })
+  ok('ADVERSARY (delegated): signature_key_id swapped (oid unaffected, signature reused) -> MUST fail',
+     !res4f.valid)
+
+  // Sanity: dispatcher-level too, not just the direct verifyGapSelfSignedReceipt call.
+  const dispForged = await verifyReceiptByScheme({
+    receipt: forgedGapVersion as unknown as Record<string, unknown>,
+    gap_ed25519_pub: keyPair.publicKey,
+  })
+  ok('ADVERSARY (dispatcher-level): forged gap_version + recomputed oid rejected via verifyReceiptByScheme too',
+     dispForged.valid === false)
 
   // 5. Dispatcher routes by receipt_scheme.
   const disp1 = await verifyReceiptByScheme({
