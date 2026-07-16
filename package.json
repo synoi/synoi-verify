@@ -1,6 +1,6 @@
 {
   "name": "@synoi/verify",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Offline Ed25519 verifier for SynOI Decision Receipts. CLI + programmatic API. No network call required if you have the receipt JSON + the gateway's public key.",
   "license": "Apache-2.0",
   "homepage": "https://synoi.systems/products/receipts-verifier",
