@@ -2,7 +2,7 @@
 /**
  * synoi-verify — verify a SynOI Decision Receipt from the command line.
  *
- *   npx @synoi/verify <receipt-id>                          → verify against http://localhost:3000
+ *   npx @synoi/verify <receipt-id>                          → verify against https://gateway.synoi.systems
  *   npx @synoi/verify <receipt-id> --gateway https://...    → verify against a remote gateway
  *   npx @synoi/verify --help
  *

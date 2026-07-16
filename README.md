@@ -11,7 +11,7 @@ npx @synoi/verify rcpt_abc_123
 ```
 
 ```
-  Gateway     : http://localhost:3000
+  Gateway     : https://gateway.synoi.systems
   Receipt ID  : rcpt_abc_123
   Algorithm   : Ed25519
   Signer key  : key_2026_05_18

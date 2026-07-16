@@ -244,7 +244,7 @@ async function main(): Promise<void> {
     if (result) {
       // If we got a result (unlikely), it must be invalid
       ok('I1: default gateway → valid=false (no server)', result.valid === false)
-      ok('I1: default gateway is localhost:3000', result.gateway === 'http://localhost:3000')
+      ok('I1: default gateway is production', result.gateway === 'https://gateway.synoi.systems')
     } else {
       // Connection refused before we got a result — that's expected behavior
       ok('I1: default gateway parameter omittable', true)
