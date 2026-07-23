@@ -1,6 +1,8 @@
 export {
   jcsCanonicalize,
   verifyReceiptSignature,
+  verifyEd25519Raw,
+  verifyMlDsaRaw,
   canonicalPayload,
   CANONICAL_FIELDS,
   OPTIONAL_CANONICAL_FIELDS,

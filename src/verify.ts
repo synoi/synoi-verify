@@ -43,35 +43,27 @@ import {
 export * from './verify-shared'
 
 /**
- * Verify a receipt's Ed25519 signature against a PEM-encoded public key.
+ * Verify an Ed25519 signature over ALREADY-CANONICALIZED bytes (no
+ * canonicalPayload() reconstruction). This is the ONE Ed25519 check both
+ * `verifyReceiptSignature` (below, which derives `canonical` itself from a
+ * CANONICAL_FIELDS projection) and the fetch.ts single-receipt hybrid path
+ * (which fetches the exact signed bytes from GET /verify/:id/raw) delegate
+ * to, so there is exactly one Ed25519-verify call site, not two.
  *
- * @param payload   the receipt fields (must include all CANONICAL_FIELDS)
+ * @param canonical     the exact bytes that were signed
  * @param signatureHex  64-byte Ed25519 signature, hex-encoded
  * @param publicKeyPem  the gateway's public key in PEM/SPKI format
  *
  * Returns `{ valid: true }` on a verified signature, or
  * `{ valid: false, reason: '...' }` on any failure. Never throws.
  *
- * NODE-ONLY: uses node:crypto. This is the v1 legacy path. Browser bundles use
- * @synoi/verify/browser, which does not include this function.
+ * NODE-ONLY: uses node:crypto.
  */
-export function verifyReceiptSignature(
-  payload:       Record<string, unknown>,
+export function verifyEd25519Raw(
+  canonical:     string,
   signatureHex:  string,
   publicKeyPem:  string,
 ): VerifyResult {
-  let canonical: string
-  try {
-    canonical = canonicalPayload(payload)
-  } catch (err) {
-    return {
-      valid:             false,
-      canonical_payload: '',
-      algorithm:         'Ed25519',
-      reason:            (err as Error).message,
-    }
-  }
-
   if (!/^[0-9a-fA-F]{128}$/.test(signatureHex)) {
     return {
       valid:             false,
@@ -102,6 +94,65 @@ export function verifyReceiptSignature(
       algorithm:         'Ed25519',
       reason:            (err as Error).message,
     }
+  }
+}
+
+/**
+ * Verify a receipt's Ed25519 signature against a PEM-encoded public key.
+ *
+ * @param payload   the receipt fields (must include all CANONICAL_FIELDS)
+ * @param signatureHex  64-byte Ed25519 signature, hex-encoded
+ * @param publicKeyPem  the gateway's public key in PEM/SPKI format
+ *
+ * Returns `{ valid: true }` on a verified signature, or
+ * `{ valid: false, reason: '...' }` on any failure. Never throws.
+ *
+ * NODE-ONLY: uses node:crypto. This is the v1 legacy path. Browser bundles use
+ * @synoi/verify/browser, which does not include this function.
+ */
+export function verifyReceiptSignature(
+  payload:       Record<string, unknown>,
+  signatureHex:  string,
+  publicKeyPem:  string,
+): VerifyResult {
+  let canonical: string
+  try {
+    canonical = canonicalPayload(payload)
+  } catch (err) {
+    return {
+      valid:             false,
+      canonical_payload: '',
+      algorithm:         'Ed25519',
+      reason:            (err as Error).message,
+    }
+  }
+  return verifyEd25519Raw(canonical, signatureHex, publicKeyPem)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ML-DSA-65 verification over raw already-canonicalized bytes. Used by the
+// fetch.ts single-receipt hybrid path. Delegates to @synoi/sraid's
+// verifyMlDsa65 (the SAME function the v2/bundle paths use) rather than a
+// second ML-DSA implementation -- there is exactly one PQ verifier in this
+// dependency graph.
+//
+// @synoi/sraid is ESM-only; dynamic-imported for the same CJS-interop reason
+// verifyReceiptV2 below dynamic-imports it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function verifyMlDsaRaw(
+  canonical:      string,
+  signatureB64:   string,
+  publicKeyB64:   string,
+): Promise<boolean> {
+  try {
+    const sraid = await import('@synoi/sraid')
+    const sigBytes = new Uint8Array(Buffer.from(signatureB64, 'base64'))
+    const pubBytes = new Uint8Array(Buffer.from(publicKeyB64, 'base64'))
+    const msgBytes = new Uint8Array(Buffer.from(canonical, 'utf8'))
+    return sraid.verifyMlDsa65(sigBytes, msgBytes, pubBytes)
+  } catch {
+    return false
   }
 }
 
