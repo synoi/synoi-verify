@@ -197,12 +197,13 @@ async function main(): Promise<number> {
     }
     process.stdout.write('\n')
     if (result.valid) {
-      process.stdout.write('  VERIFIED -- signature is valid; receipt has not been tampered with.\n')
-      process.stdout.write('  CAVEAT: this path is Ed25519-only (no post-quantum). The public key above\n')
-      process.stdout.write('  was fetched from the SAME origin as the receipt, so this proves internal\n')
-      process.stdout.write('  consistency only, NOT that the key belongs to a legitimate SynOI gateway.\n')
-      process.stdout.write('  You must anchor the key/fingerprint above out of band (publisher pubkey,\n')
-      process.stdout.write('  transparency log, or a trusted channel) before trusting this receipt.\n\n')
+      process.stdout.write('  VERIFIED -- both signatures (Ed25519 + ML-DSA-65) are valid; receipt has\n')
+      process.stdout.write('  not been tampered with.\n')
+      process.stdout.write('  CAVEAT: the public keys above were fetched from the SAME origin as the\n')
+      process.stdout.write('  receipt, so this proves internal consistency only, NOT that the keys\n')
+      process.stdout.write('  belong to a legitimate SynOI gateway. You must anchor the key/fingerprint\n')
+      process.stdout.write('  above out of band (publisher pubkey, transparency log, or a trusted\n')
+      process.stdout.write('  channel) before trusting this receipt.\n\n')
       return 0
     }
     process.stdout.write(`  INVALID -- ${result.reason ?? 'verification failed'}\n\n`)
