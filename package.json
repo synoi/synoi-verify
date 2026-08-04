@@ -1,6 +1,6 @@
 {
   "name": "@synoi/verify",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Offline Ed25519 verifier for SynOI Decision Receipts. CLI + programmatic API. No network call required if you have the receipt JSON + the gateway's public key.",
   "license": "Apache-2.0",
   "homepage": "https://synoi.systems/products/receipts-verifier",
@@ -38,7 +38,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "tsx test/verify.test.ts && tsx test/canonical-parity.test.ts && tsx test/selftest.test.ts && tsx test/verify-v2.test.ts && tsx test/verify-gap-selfsign.test.ts && tsx test/verify-by-scheme.test.ts && tsx test/merkle.test.ts && tsx test/countersign.test.ts && tsx test/recipe.test.ts && tsx test/fetch.test.ts && tsx test/replay-chain.test.ts && tsx test/source-cursor-render.test.ts && tsx test/cited-oracle-render.test.ts && tsx test/dual-signer-oid.test.ts && tsx test/bundle.test.ts && tsx test/browser-entry.test.ts",
+    "test": "tsx test/verify.test.ts && tsx test/canonical-parity.test.ts && tsx test/selftest.test.ts && tsx test/verify-v2.test.ts && tsx test/verify-gap-selfsign.test.ts && tsx test/verify-by-scheme.test.ts && tsx test/merkle.test.ts && tsx test/countersign.test.ts && tsx test/recipe.test.ts && tsx test/fetch.test.ts && tsx test/replay-chain.test.ts && tsx test/source-cursor-render.test.ts && tsx test/cited-oracle-render.test.ts && tsx test/dual-signer-oid.test.ts && tsx test/bundle.test.ts && tsx test/browser-entry.test.ts && tsx test/browser-v2.test.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build && npm test"
   },
@@ -55,7 +55,7 @@
   },
   "dependencies": {
     "@synoi/gap": "^1.1.0",
-    "@synoi/sraid": "^0.2.0",
+    "@synoi/sraid": "^0.3.0",
     "@synoi/verify-core": "^0.1.0"
   },
   "devDependencies": {

@@ -48,9 +48,54 @@ import { verifyReceiptSignature } from '@synoi/verify'
 const result = verifyReceiptSignature(receiptJson, signatureHex, publicKeyPem)
 ```
 
+## In a browser, a Chrome extension, or a service worker
+
+Import `@synoi/verify/browser`. The default entry statically imports `node:crypto`
+for its legacy v1 path, which does not exist in a browser and breaks the bundle;
+the `/browser` subpath is the browser-safe surface.
+
+```ts
+import { verifyReceiptByScheme } from '@synoi/verify/browser'
+
+const result = await verifyReceiptByScheme({
+  receipt,      // the full receipt JSON, pasted or loaded from anywhere
+  ed25519_pub,  // raw 32 bytes
+  ml_dsa_pub,   // raw 1952 bytes
+})
+// result.scheme === 'v2', result.valid === true|false
+```
+
+What the browser build verifies, and what it does not:
+
+| Receipt scheme | Browser | Node |
+|---|---|---|
+| `synoi.receipt/v2` (hybrid DSSE, Ed25519 **and** ML-DSA-65) | yes | yes |
+| `synoi.receipt/gap-selfsign` (single Ed25519, lite daemon) | yes | yes |
+| legacy v1, no `receipt_scheme` field | no, fails closed | opt-in only |
+
+Every receipt the SynOI gateway mints carries `receipt_scheme: 'synoi.receipt/v2'`,
+so the v2 row is the one that matters in practice. It requires **both** signatures:
+a v2 receipt whose ML-DSA-65 signature is missing or invalid is rejected, never
+accepted on the Ed25519 signature alone.
+
+A receipt whose scheme this build cannot verify is **rejected with a reason**, never
+passed. A missing `receipt_scheme` is not silently treated as v1, so stripping the
+discriminator to force the weaker path does not work.
+
+Requires `@synoi/sraid` >= 0.3.0, which is where the browser-safe hybrid verify
+lives. Ed25519 runs on WebCrypto with a `@noble/curves` fallback, ML-DSA-65 on
+`@noble/post-quantum`, SHA-256 on WebCrypto. No network call, no account, and
+nothing you paste leaves the page.
+
 ## What's being verified
 
-The signature covers exactly seven canonical fields, alphabetically sorted, JSON-stringified with default separators:
+This section describes the **legacy v1** scheme, which is what the `npx @synoi/verify <id>`
+CLI above checks. It is not what a current gateway receipt carries: those are
+`synoi.receipt/v2`, whose detached DSSE attestation covers the receipt's whole
+content core rather than a seven-field projection, and requires both an Ed25519
+and an ML-DSA-65 signature. See the browser table above for scheme coverage.
+
+Under v1, the signature covers exactly seven canonical fields, alphabetically sorted, JSON-stringified with default separators:
 
 ```
 action_class, decision, oid_hex, receipt_id, recorded_at, risk_level, tenant_id

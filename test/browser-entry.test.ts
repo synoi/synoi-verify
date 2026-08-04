@@ -20,10 +20,16 @@
  *      for the browser, exactly the breakage the browser entry avoids.
  *
  *   B. FUNCTIONAL. The browser entry actually verifies a gap-selfsign receipt,
- *      routes it through its dispatcher, and fails CLOSED (with honest,
- *      build-capability reasons) on the two node-bound schemes (v1 legacy and
- *      v2 hybrid DSSE) it deliberately does not carry. It also does NOT export
- *      the two node-only verifiers, so their absence is a compile-time signal.
+ *      routes it through its dispatcher, routes the v2 scheme to the
+ *      browser-safe v2 verifier, and fails CLOSED (with an honest
+ *      build-capability reason) on the one node-bound scheme it deliberately
+ *      does not carry, legacy v1. It also does not export the node-only
+ *      verifiers, so their absence is a compile-time signal.
+ *
+ * SCOPE NOTE: v2 used to fail closed here too, with
+ * `v2-not-supported-in-browser-build`, until @synoi/sraid 0.3.0 shipped its
+ * `./verify-browser` subpath. The v2 behaviour matrix now lives in
+ * test/browser-v2.test.ts; this file keeps only the dispatcher-routing check.
  *
  * CLAIMS DISCIPLINE: no vector, no claim. This is that vector. NO em dashes.
  *
@@ -112,12 +118,18 @@ async function main(): Promise<void> {
      nodeBundle.messages)
 
   // ── B. FUNCTIONAL ──────────────────────────────────────────────────────────
-  // The browser entry omits the two node-only verifiers entirely: their
-  // absence is a compile-time signal, not a runtime surprise.
+  // The browser entry omits the node-only v1 verifier entirely: its absence is
+  // a compile-time signal, not a runtime surprise. It also does not re-export
+  // the NODE `verifyReceiptV2` under that name; the browser v2 verifier is a
+  // distinct export (verifyReceiptV2Browser) over @synoi/sraid/verify-browser,
+  // so a consumer cannot import the node-bound one by muscle memory and drag
+  // node:crypto into their bundle.
   ok('browser entry does NOT export verifyReceiptSignature (v1, node:crypto)',
      (browser as Record<string, unknown>)['verifyReceiptSignature'] === undefined)
-  ok('browser entry does NOT export verifyReceiptV2 (v2, @synoi/sraid node-bound)',
+  ok('browser entry does NOT export the node-bound verifyReceiptV2 under that name',
      (browser as Record<string, unknown>)['verifyReceiptV2'] === undefined)
+  ok('browser entry DOES export verifyReceiptV2Browser (browser-safe v2)',
+     typeof browser.verifyReceiptV2Browser === 'function')
   // The pure + gap-selfsign surface IS present.
   ok('browser entry exports verifyGapSelfSignedReceipt',
      typeof browser.verifyGapSelfSignedReceipt === 'function')
@@ -156,17 +168,21 @@ async function main(): Promise<void> {
   ok('browser: dispatcher rejects a tampered gap-selfsign receipt (not a false pass)',
      dispTampered.valid === false && dispTampered.scheme === 'gap-selfsign')
 
-  // v2 scheme fails CLOSED in the browser build, even WITH both keys supplied
-  // (the v2 verifier is node-bound and was not injected).
+  // v2 IS supported in the browser build now (@synoi/sraid/verify-browser, wired
+  // via src/verify-v2-browser.ts). It must route to the v2 verifier and REJECT
+  // this garbage envelope on its merits, NOT bail out with the old
+  // build-capability excuse. The full v2 positive/negative matrix, the node
+  // parity check and the with-v2-in-the-graph bundle scan live in
+  // test/browser-v2.test.ts; this is the dispatcher-routing assertion only.
   const v2Attempt = await browser.verifyReceiptByScheme({
     receipt:     { receipt_scheme: browser.RECEIPT_SCHEME_V2, attestation: {} } as Record<string, unknown>,
     ed25519_pub: new Uint8Array(32),
     ml_dsa_pub:  new Uint8Array(1952),
   })
-  ok('browser: v2 scheme fails closed with an honest build-capability reason',
+  ok('browser: v2 scheme routes to the browser v2 verifier (no longer fails closed on build capability)',
      v2Attempt.valid === false &&
-     v2Attempt.scheme === 'rejected' &&
-     v2Attempt.reasons.includes('v2-not-supported-in-browser-build'),
+     v2Attempt.scheme === 'v2' &&
+     !v2Attempt.reasons.includes('v2-not-supported-in-browser-build'),
      v2Attempt.reasons.join(', '))
 
   // Scheme-less legacy-v1: fails closed even when the caller opts in, because
