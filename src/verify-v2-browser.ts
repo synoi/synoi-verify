@@ -1,5 +1,5 @@
 /**
- * verify-v2-browser.ts — the v2 hybrid DSSE verifier, browser edition.
+ * verify-v2-browser.ts - the v2 hybrid DSSE verifier, browser edition.
  *
  * WHY A SECOND FILE AND NOT A FLAG. ./verify's `verifyReceiptV2` dynamic-imports
  * `@synoi/sraid`, whose default entry statically imports node:crypto in three
@@ -53,9 +53,9 @@ const V2_ALGORITHM = 'DSSE(ed25519+ml-dsa-65)' as const
  * service-worker context. Same two checks, same order, same reasons as the node
  * `verifyReceiptV2`:
  *
- *   1. Content-core bind — recompute `canonicalize(cdroContentCore(receipt))`
+ *   1. Content-core bind - recompute `canonicalize(cdroContentCore(receipt))`
  *      and require it to equal the envelope's `payload`.
- *   2. Hybrid signature verify — BOTH ed25519 AND ml-dsa-65 over the PAE, with
+ *   2. Hybrid signature verify - BOTH ed25519 AND ml-dsa-65 over the PAE, with
  *      the payloadType pinned.
  *
  * Returns `valid: true` only when both pass. Never throws: a missing subpath, an

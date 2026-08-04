@@ -1,5 +1,5 @@
 /**
- * @synoi/verify/browser — browser / Chrome-extension / service-worker entry.
+ * @synoi/verify/browser - browser / Chrome-extension / service-worker entry.
  *
  * The default (`main`) entry statically imports `node:crypto` for its v1 legacy
  * path, which does not exist in a browser or service-worker context and breaks
@@ -9,20 +9,20 @@
  * main entry is itself node:crypto-bound).
  *
  * WHAT WORKS HERE (SHIPPED):
- *   - v2 hybrid DSSE verification (verifyReceiptV2Browser) — Ed25519 AND
+ *   - v2 hybrid DSSE verification (verifyReceiptV2Browser) - Ed25519 AND
  *     ML-DSA-65 both required, via @synoi/sraid/verify-browser. THIS IS THE TIER
  *     EVERY GATEWAY RECEIPT USES: engine.ts stamps
  *     `receipt_scheme: 'synoi.receipt/v2'` on every receipt it mints, so before
  *     this was wired the browser build could not verify a single real one.
- *   - gap-selfsign verification (verifyGapSelfSignedReceipt) — single Ed25519
+ *   - gap-selfsign verification (verifyGapSelfSignedReceipt) - single Ed25519
  *     via @synoi/gap, which is @noble-only and fully browser-safe. This is the
  *     tier the lite self-host daemon and the AI Receipt extension actually use.
  *   - the pure surface: canonicalPayload, jcsCanonicalize, renderReplayChain,
  *     all scheme constants and result/input types.
- *   - verifyReceiptByScheme — routes v2 and gap-selfsign fully; v1 fails closed.
+ *   - verifyReceiptByScheme - routes v2 and gap-selfsign fully; v1 fails closed.
  *
  * WHAT DOES NOT (fail-closed / omitted):
- *   - verifyReceiptSignature (v1 legacy, node:crypto) — OMITTED from this entry.
+ *   - verifyReceiptSignature (v1 legacy, node:crypto) - OMITTED from this entry.
  *     A scheme-less legacy-v1 receipt routed through verifyReceiptByScheme fails
  *     closed with reason `legacy-v1-not-available-in-this-build`. v1 is the
  *     older flat CANONICAL_FIELDS projection; it has no browser-safe verifier
@@ -51,7 +51,7 @@ import { verifyReceiptV2Browser } from './verify-v2-browser'
 // Re-export the full browser-safe shared surface: pure canonicalization,
 // gap-selfsign, renderReplayChain, all scheme constants and types, and the
 // createVerifyReceiptByScheme factory. This intentionally does NOT include
-// verifyReceiptSignature (v1) — that lives only on the Node ./verify entry,
+// verifyReceiptSignature (v1) - that lives only on the Node ./verify entry,
 // because it is node:crypto-bound.
 export * from './verify-shared'
 

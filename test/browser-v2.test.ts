@@ -1,5 +1,5 @@
 /**
- * test/browser-v2.test.ts — @synoi/verify/browser verifies a REAL v2 receipt.
+ * test/browser-v2.test.ts - @synoi/verify/browser verifies a REAL v2 receipt.
  *
  * WHY THIS EXISTS. Every receipt the gateway mints carries
  * `receipt_scheme: 'synoi.receipt/v2'` (synoi-gateway/src/gap/engine.ts:1998 and
