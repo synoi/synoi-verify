@@ -54,7 +54,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@synoi/gap": "^1.1.0",
+    "@synoi/gap": "^1.2.0",
     "@synoi/sraid": "^0.3.0",
     "@synoi/verify-core": "^0.1.0"
   },

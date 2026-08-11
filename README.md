@@ -95,6 +95,14 @@ A receipt whose scheme this build cannot verify is **rejected with a reason**, n
 passed. A missing `receipt_scheme` is not silently treated as v1, so stripping the
 discriminator to force the weaker path does not work.
 
+The `gap-selfsign` row requires `@synoi/gap` >= 1.2.0, in Node and in the browser
+alike. 1.2.0 is where `receipt()` began stamping `receipt_scheme` on the envelope
+it mints, and where the signed payload widened to cover `gap_version`,
+`supersedes`, and `signature_key_id`. A receipt minted by `@synoi/gap` 1.1.0 or
+earlier carries no discriminator, so this dispatcher rejects it as
+`missing-receipt-scheme-and-legacy-v1-not-allowed`: fail-closed, but it does not
+verify.
+
 Requires `@synoi/sraid` >= 0.3.0, which is where the browser-safe hybrid verify
 lives. Ed25519 runs on WebCrypto with a `@noble/curves` fallback, ML-DSA-65 on
 `@noble/post-quantum`, SHA-256 on WebCrypto. No network call, no account, and
