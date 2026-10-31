@@ -46,8 +46,9 @@ export const UNSIGNED_DEGRADED = 'UNSIGNED_DEGRADED' as const
 
 /**
  * The receipt carries a field its version does not sign, but which a LATER
- * version does sign (today: `degraded_reason`, `integrity_grade` on an
- * unversioned receipt). Its value is display-only and must not be trusted.
+ * version does sign (today: `degraded_reason`, `integrity_grade`, `agent_id`,
+ * `owner_oid` on an unversioned receipt). Its value is display-only and must
+ * not be trusted.
  */
 export const UNSIGNED_FIELD = 'UNSIGNED_FIELD' as const
 
@@ -118,6 +119,12 @@ export const DEGRADED_REASON_CODES: Readonly<Record<string, Exclude<IntegrityGra
   trust_token_unverified: 'B',
 })
 
+/**
+ * Optional hosted-v1.2 fields reserved for the agent registry: signed when
+ * present, absent (or null) when the gateway does not know the agent.
+ */
+export const AGENT_REGISTRY_FIELDS = ['agent_id', 'owner_oid'] as const
+
 // ── Registry types ───────────────────────────────────────────────────────────
 
 export type VersionStatus = 'current' | 'legacy' | 'proposed'
@@ -187,7 +194,7 @@ export const RECEIPT_VERSION_REGISTRY: readonly ReceiptVersionEntry[] = Object.f
     required_fields:   [...LEGACY_REQUIRED_FIELDS],
     optional_fields:   OPTIONAL_WITHOUT_DEGRADED,
     degraded_rule:     'unsigned',
-    display_unsigned:  ['degraded', 'degraded_reason', 'integrity_grade'],
+    display_unsigned:  ['degraded', 'degraded_reason', 'integrity_grade', 'agent_id', 'owner_oid'],
     canonicalization:  FLAT_CANON,
     signature_schemes: FLAT_SIGS,
     warnings:          [UNSIGNED_DEGRADED, UNSIGNED_FIELD],
@@ -200,35 +207,36 @@ export const RECEIPT_VERSION_REGISTRY: readonly ReceiptVersionEntry[] = Object.f
     id:                'hosted-v1.1',
     family:            'hosted-flat',
     schema_version:    null,
-    status:            'current',
+    status:            'legacy',
     required_fields:   [...LEGACY_REQUIRED_FIELDS, 'degraded'],
     optional_fields:   OPTIONAL_WITHOUT_DEGRADED,
     degraded_rule:     'absent-is-false',
-    display_unsigned:  ['degraded_reason', 'integrity_grade'],
+    display_unsigned:  ['degraded_reason', 'integrity_grade', 'agent_id', 'owner_oid'],
     canonicalization:  FLAT_CANON,
     signature_schemes: FLAT_SIGS,
     warnings:          [UNSIGNED_FIELD],
     form:              'current',
     description:
       'Hosted gateway receipt since #253: `degraded` signed as !!degraded. No schema_version. ' +
-      'What synoi-gateway main emits today. The guard path (/v1/risk/evaluate) signs a literal false.',
+      'What synoi-gateway emitted before hosted-v1.2. Its guard path (/v1/risk/evaluate) signed a literal false.',
   },
   {
     id:                'hosted-v1.2',
     family:            'hosted-flat',
     schema_version:    HOSTED_V1_2_SCHEMA_VERSION,
-    status:            'proposed',
+    status:            'current',
     required_fields:   [...LEGACY_REQUIRED_FIELDS, 'degraded', 'integrity_grade', 'schema_version'],
-    optional_fields:   [...OPTIONAL_WITHOUT_DEGRADED, 'degraded_reason'],
+    optional_fields:   [...OPTIONAL_WITHOUT_DEGRADED, 'degraded_reason', 'agent_id', 'owner_oid'],
     degraded_rule:     'required',
     display_unsigned:  [],
     canonicalization:  FLAT_CANON,
     signature_schemes: FLAT_SIGS,
     warnings:          [],
     description:
-      'PROPOSED, not yet emitted by the gateway (synoi-gateway docs/RECEIPT_VERSIONS.md). ' +
-      'Signs schema_version, the computed `degraded` on every path including the guard, ' +
-      'integrity_grade (A-D), and degraded_reason (sorted comma-joined codes) exactly when degraded.',
+      'What synoi-gateway emits (docs/RECEIPT_VERSIONS.md). Signs schema_version, the computed ' +
+      '`degraded` on every path including the guard, integrity_grade (A-D), degraded_reason ' +
+      '(sorted comma-joined codes) exactly when degraded, and, when the gateway knows them, ' +
+      'the agent registry fields agent_id and owner_oid.',
   },
   {
     id:                'gap-v2-dsse',
@@ -385,6 +393,13 @@ export function warningsForEntry(payload: Record<string, unknown>, entry: Hosted
  */
 export function checkVersionSemantics(payload: Record<string, unknown>, entry: HostedFlatVersionEntry): string | null {
   if (entry.id !== 'hosted-v1.2') return null
+  // Agent registry fields: absent/null = unknown; when present, a non-empty string.
+  for (const f of AGENT_REGISTRY_FIELDS) {
+    const v = payload[f]
+    if (v !== undefined && v !== null && (typeof v !== 'string' || v === '')) {
+      return `${entry.id}: ${f} must be a non-empty string when present; got ${JSON.stringify(v)}`
+    }
+  }
   const degraded = payload['degraded'] === true || payload['degraded'] === 1
   const grade = payload['integrity_grade']
   if (typeof grade !== 'string' || !(INTEGRITY_GRADES as readonly string[]).includes(grade)) {

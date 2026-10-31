@@ -167,6 +167,19 @@ Check `result.warnings` (also lifted to the top level of `verifyReceiptByScheme`
 
 Algorithm: **Ed25519** · Signature encoding: **128 hex chars (64 raw bytes)** · Public key: **PEM SPKI**, available at `GET <gateway>/verify/pubkey`.
 
+### Update, 2026-10-31: `hosted-v1.2` is current
+
+This update supersedes the status column of the table above. The gateway now emits `hosted-v1.2`. Its status is `current`. `hosted-v1.1` and `hosted-v1.0` are `legacy`, and receipts in those versions keep verifying exactly as before.
+
+`hosted-v1.2` also reserves two optional signed fields for the agent registry:
+
+- `agent_id`: the agent that made the request.
+- `owner_oid`: the OID of that agent's owner.
+
+Each one is left out of the signed bytes when the gateway does not know it (absent or `null`). When it is present it is signed, and it must be a non-empty string. Changing, adding or dropping either one fails verification. A `hosted-v1.0` / `hosted-v1.1` receipt that displays `agent_id` or `owner_oid` verifies, with an `UNSIGNED_FIELD` warning for each, because those versions never signed them.
+
+Every list in the registry is vendored from synoi-gap `schemas/receipt-versions.json`, copied verbatim to `vectors/receipt-versions.json`, and `test/receipt-version-v1-2.test.ts` fails if they drift. The list covers the per-version signed fields, the `degraded_reason` codes and the grades.
+
 ## Fully offline
 
 The promise of the SynOI Decision Receipt is "verifiable by anyone, without SynOI
