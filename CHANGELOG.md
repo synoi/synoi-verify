@@ -11,13 +11,33 @@
   from synoi-gap `schemas/canonical-receipt-fields.json` (version 1) into
   `src/canonical-fields.ts`, with a verbatim copy at
   `vectors/canonical-receipt-fields.json`.
-- `verifyReceiptSignature` checks exactly two fixed forms, matching the
-  gateway's own verifier: the current form (`degraded` bound as a boolean) and
-  the legacy form signed before `degraded` was bound. It never tries subsets of
-  the signed fields, so dropping or changing any signed field (including
-  `degraded` or `sequence`) fails.
+- `verifyReceiptSignature` verifies against a **version registry**
+  (`RECEIPT_VERSION_REGISTRY`, `src/receipt-versions.ts`), never by trying
+  subsets of the signed fields. A receipt carrying `schema_version` is checked
+  only against that entry; an unknown value fails closed with an
+  `unknown-schema-version` reason. A receipt without one (everything signed so
+  far) is checked against `hosted-v1.1` then `hosted-v1.0`, whose canonical
+  bytes are disjoint (v1.1 always signs a `degraded` key, v1.0 never does).
+  Dropping or changing any signed field (including `degraded` or `sequence`)
+  fails.
 
 ### Added
+
+- Version registry entries: `hosted-v1.0` (legacy, before gateway #253),
+  `hosted-v1.1` (current), `hosted-v1.2` (**proposed, not yet emitted by the
+  gateway**: signs `schema_version`, `integrity_grade`, and `degraded_reason`
+  exactly when degraded, with value-consistency rules), plus descriptive
+  entries for `gap-v2-dsse` and `gap-selfsign`. New exports:
+  `RECEIPT_VERSION_REGISTRY`, `getReceiptVersion`, `resolveHostedVersions`,
+  `canonicalPayloadForVersion`, `checkVersionSemantics`,
+  `HOSTED_V1_2_SCHEMA_VERSION`, `DEGRADED_REASON_CODES`, `INTEGRITY_GRADES`,
+  and their types. `VerifyResult.version` names the entry that verified.
+- `UNSIGNED_FIELD` warning (and `unsignedFieldWarning`): an unversioned
+  receipt that displays `degraded_reason` or `integrity_grade`, which only
+  `hosted-v1.2` signs.
+- Removed before release: `canonicalPayloadForms` and `CanonicalFormCandidate`
+  (the two-form guesser this registry replaces). Both were added earlier in
+  this unreleased 0.3.1 and never published.
 
 - `VerifyResult.form` (`'current' | 'legacy-without-degraded'`),
   `VerifyResult.signed_fields`, and `VerifyResult.unsigned_canonical_fields`
@@ -37,8 +57,7 @@
   top-level `warnings`. New exports: `UNSIGNED_DEGRADED`,
   `unsignedDegradedWarning`, and the types `VerifyWarning` and
   `VerifyWarningCode`.
-- `ALL_CANONICAL_FIELDS`, `CANONICAL_FIELDS_SCHEMA_VERSION`, and
-  `canonicalPayloadForms`.
+- `ALL_CANONICAL_FIELDS` and `CANONICAL_FIELDS_SCHEMA_VERSION`.
 - A drift test (`test/hosted-canonical-fields.test.ts`) that fails if the
   vendored list differs from synoi-gap's schema file or from the gateway's
   `CANONICAL_FIELDS`, when those checkouts are present next to this repo

@@ -52,6 +52,16 @@ import {
   OPTIONAL_FIELDS,
   CANONICAL_FIELDS_SCHEMA_VERSION,
 } from './canonical-fields'
+import {
+  canonicalForEntry,
+  getReceiptVersion,
+  type HostedVersionId,
+  type VersionCanonical,
+  type VerifyWarning,
+} from './receipt-versions'
+
+// The version registry and its warning vocabulary are part of the shared surface.
+export * from './receipt-versions'
 
 /**
  * RFC 8785 (JCS) canonicalizer — a byte-for-byte port of
@@ -159,14 +169,11 @@ export const ALL_CANONICAL_FIELDS: readonly string[] =
 export { CANONICAL_FIELDS_SCHEMA_VERSION }
 
 /**
- * Which signed form a v1 receipt verified under.
- *   'current'                  the gateway's current form: `degraded` is bound
- *                              (as a boolean; absent is signed as false).
- *   'legacy-without-degraded'  a receipt signed before #253 bound `degraded`.
- *                              Any `degraded` value it carries is NOT covered by
- *                              the signature (see unsigned_canonical_fields).
- * Older field sets need no form of their own: every other field is
- * omit-when-absent, so an older receipt simply lacks the newer keys.
+ * The PR #1 label for the two UNVERSIONED registry entries, kept on results so
+ * existing callers keep working. Prefer `VerifyResult.version`.
+ *   'current'                  = hosted-v1.1 (`degraded` bound as a boolean)
+ *   'legacy-without-degraded'  = hosted-v1.0 (signed before #253 bound it)
+ * A versioned receipt (hosted-v1.2) has no `form`.
  */
 export type CanonicalForm = 'current' | 'legacy-without-degraded'
 
@@ -185,54 +192,24 @@ export interface VerifyResult {
   canonical_payload: string
   algorithm:         'Ed25519'
   reason?:           string
-  /** verifyReceiptSignature: the signed form that verified (set only when valid). */
+  /** verifyReceiptSignature: the registry version that verified (set only when valid). */
+  version?:          HostedVersionId
+  /** verifyReceiptSignature: PR #1 label of an unversioned version (see CanonicalForm). */
   form?:             CanonicalForm
   /** verifyReceiptSignature: the fields the verified signature covers, sorted. */
   signed_fields?:    string[]
   /**
-   * verifyReceiptSignature: canonical fields the receipt CARRIES that the
-   * verified signature does NOT cover (today only `degraded` on a
-   * 'legacy-without-degraded' receipt). Do not trust these values.
+   * verifyReceiptSignature: fields the receipt CARRIES that the verified
+   * version does NOT sign (e.g. `degraded` on hosted-v1.0, `degraded_reason`
+   * on hosted-v1.0/v1.1). Do not trust these values.
    */
   unsigned_canonical_fields?: string[]
   /**
    * verifyReceiptSignature: warnings about a VALID result (empty when there are
-   * none; absent on an invalid result, where the failure is the signal). Today
-   * the only code is UNSIGNED_DEGRADED.
+   * none; absent on an invalid result, where the failure is the signal). Codes:
+   * UNSIGNED_DEGRADED, UNSIGNED_FIELD. Each version lists the codes it may emit.
    */
   warnings?: VerifyWarning[]
-}
-
-/**
- * Warning code: the receipt verified via the 'legacy-without-degraded' form
- * (signed before gateway #253 bound `degraded`) but carries a `degraded`
- * value. That value is not covered by the signature.
- */
-export const UNSIGNED_DEGRADED = 'UNSIGNED_DEGRADED' as const
-
-export type VerifyWarningCode = typeof UNSIGNED_DEGRADED
-
-/** A machine-readable code plus a plain-text message for a human reader. */
-export interface VerifyWarning {
-  code:    VerifyWarningCode
-  /** The receipt field the warning is about. */
-  field:   string
-  message: string
-}
-
-/**
- * The UNSIGNED_DEGRADED warning for a legacy receipt carrying `value`. Only
- * call this when the receipt verified via 'legacy-without-degraded' AND
- * carries a non-null `degraded`.
- */
-export function unsignedDegradedWarning(value: unknown): VerifyWarning {
-  return {
-    code:    UNSIGNED_DEGRADED,
-    field:   'degraded',
-    message:
-      'This receipt was signed before `degraded` was included in the signature. ' +
-      `Its \`degraded\` value (${JSON.stringify(value)}) was not signed and must not be trusted.`,
-  }
 }
 
 /**
@@ -243,67 +220,29 @@ export function unsignedDegradedWarning(value: unknown): VerifyWarning {
  * Throws if any REQUIRED canonical field is missing. Optional canonical fields
  * (gateway_manifest_sha256, sequence, degraded, ...) are included if present
  * and omitted otherwise — this preserves verification of receipts signed
- * before the optional fields existed. This is a pure projection: it does NOT
- * apply the gateway's `degraded` rule; canonicalPayloadForms does.
+ * before the optional fields existed. This is a pure projection over the
+ * vendored 26 fields: it applies no version's rules. To get the bytes a given
+ * version signs, use canonicalPayloadForVersion.
  */
 export function canonicalPayload(payload: Record<string, unknown>): string {
   return jcsCanonicalize(canonicalProjection(payload))
 }
 
-/** One fixed signed form of a v1 receipt; see canonicalPayloadForms. */
-export interface CanonicalFormCandidate {
-  form:                      CanonicalForm
-  canonical_payload:         string
-  signed_fields:             string[]
-  unsigned_canonical_fields: string[]
-}
-
 /**
- * The gateway signs `degraded: !!receipt.degraded` (verify-router.ts, #253):
- * absent or null is signed as false. Store rows export it as 0/1. Anything
- * else is not a value the gateway signs, so reject it (fail-closed) rather
- * than coerce a string like "false" to true.
+ * The exact bytes the hosted-flat registry version `versionId` signs for this
+ * receipt (see ./receipt-versions). Throws on an unknown or non-flat id, a
+ * missing required field, a non-scalar signed field, or a `degraded` value
+ * that version cannot have signed.
  */
-function signedDegraded(value: unknown): boolean {
-  if (value === undefined || value === null || value === false || value === 0) return false
-  if (value === true || value === 1) return true
-  throw new Error(
-    `canonicalPayloadForms: 'degraded' must be a boolean (or 0/1); got ${JSON.stringify(value)}`,
-  )
-}
-
-/**
- * The canonical bytes a v1 receipt may have been signed over, in the order
- * the hosted gateway checks them (verify-router.ts GET /verify/:id):
- *
- *   1. 'current'                  all canonical fields, `degraded` bound as a boolean
- *   2. 'legacy-without-degraded'  the same projection minus `degraded` (pre-#253)
- *
- * Exactly these two FIXED forms, never subsets of the signed fields: an
- * attacker who drops a signed field (e.g. `sequence`, or `degraded: true`)
- * gets bytes that match neither form. Throws like canonicalPayload, and on a
- * `degraded` value the gateway cannot have signed.
- */
-export function canonicalPayloadForms(payload: Record<string, unknown>): CanonicalFormCandidate[] {
-  const current = canonicalProjection({ ...payload, degraded: signedDegraded(payload['degraded']) })
-  const legacyInput = { ...payload }
-  delete legacyInput['degraded']
-  const legacy = canonicalProjection(legacyInput)
-  const carriesDegraded = payload['degraded'] !== undefined && payload['degraded'] !== null
-  return [
-    {
-      form:                      'current',
-      canonical_payload:         jcsCanonicalize(current),
-      signed_fields:             Object.keys(current).sort(),
-      unsigned_canonical_fields: [],
-    },
-    {
-      form:                      'legacy-without-degraded',
-      canonical_payload:         jcsCanonicalize(legacy),
-      signed_fields:             Object.keys(legacy).sort(),
-      unsigned_canonical_fields: carriesDegraded ? ['degraded'] : [],
-    },
-  ]
+export function canonicalPayloadForVersion(
+  payload:   Record<string, unknown>,
+  versionId: string,
+): VersionCanonical {
+  const entry = getReceiptVersion(versionId)
+  if (!entry || entry.family !== 'hosted-flat') {
+    throw new Error(`canonicalPayloadForVersion: unknown hosted receipt version ${JSON.stringify(versionId)}`)
+  }
+  return canonicalForEntry(payload, entry, jcsCanonicalize)
 }
 
 function canonicalProjection(payload: Record<string, unknown>): Record<string, unknown> {

@@ -110,11 +110,13 @@ nothing you paste leaves the page.
 
 ## What's being verified
 
-This section describes the **legacy v1** scheme, which is what the `npx @synoi/verify <id>`
-CLI above checks. It is not what a current gateway receipt carries: those are
-`synoi.receipt/v2`, whose detached DSSE attestation covers the receipt's whole
-content core rather than a seven-field projection, and requires both an Ed25519
-and an ML-DSA-65 signature. See the browser table above for scheme coverage.
+This section describes the **v1 (flat)** scheme, which is what the `npx @synoi/verify <id>`
+CLI above checks. It is what the hosted gateway's own Decision Receipts carry
+(chat routes, `/v1/risk/evaluate`, HITL, policy-change, MCP/A2A, bypass, drift).
+GAP CDRO receipts are different: `synoi.receipt/v2`, whose detached DSSE
+attestation covers the receipt's whole content core and requires both an
+Ed25519 and an ML-DSA-65 signature, and `synoi.receipt/gap-selfsign` (Lite).
+See the browser table above for scheme coverage.
 
 Under v1, the signature covers the canonical fields the receipt carries, alphabetically sorted and JSON-stringified with default separators. Seven are required on every receipt:
 
@@ -127,25 +129,41 @@ Nineteen more are signed when present and omitted when absent (`degraded`, `sequ
 Any other fields on the receipt (`latency_ms`, `intent_id`, `action_type`, etc.) are operational metadata and **not** part of the signature. Tampering with them won't fail verification, by design. This is the single most
 important limit of the v1 scheme, and it is why v2 exists.
 
-`verifyReceiptSignature` checks exactly two fixed forms, the same two the gateway's own `GET /verify/:id` checks, and reports which one verified in `result.form`:
+### Versions
 
-- `current`: `degraded` is signed as a boolean (absent is signed as `false`).
-- `legacy-without-degraded`: a receipt signed before the gateway bound `degraded` into the signature (gateway #253).
+Each v1 receipt is verified against exactly one entry of a version registry (`RECEIPT_VERSION_REGISTRY`, `src/receipt-versions.ts`). An entry declares its signed fields (required, and signed-when-present), canonicalization, signature schemes, status and the warnings it may emit. The result says which entry verified in `result.version`.
 
-### The `UNSIGNED_DEGRADED` warning
+| version | carries `schema_version` | status | what it signs |
+|---|---|---|---|
+| `hosted-v1.0` | no | legacy | the 7 required + 18 when present; **not** `degraded` (signed before gateway #253) |
+| `hosted-v1.1` | no | current (what the gateway emits today) | the same plus `degraded` as a boolean (absent is signed as `false`) |
+| `hosted-v1.2` | `"hosted-v1.2"` | **proposed, not yet emitted by the gateway** | the v1.1 fields plus `schema_version`, `integrity_grade` (A-D), and `degraded_reason` exactly when `degraded` is true |
 
-A `legacy-without-degraded` receipt that still carries a `degraded` value (`true`, `false`, or a `0`/`1` row export) verifies, because its signature is valid over the fields it does cover. But that `degraded` value was never signed, so the result flags it:
+How a receipt picks its entry:
+
+- **`schema_version` present:** only the entry with that value is tried. An unknown value (including `"hosted-v1.1"`, which nothing ever signed) fails closed with an `unknown-schema-version` reason, before any signature check.
+- **`schema_version` absent or null** (every receipt signed so far): `hosted-v1.1`, then `hosted-v1.0`. This is not guessing. Their canonical bytes cannot coincide, because v1.1 bytes always contain a `"degraded"` key and v1.0 bytes never do, so at most one can match a signature. Neither signs `schema_version`, so stripping the version from a v1.2 receipt makes it fail rather than read as an older one.
+
+`hosted-v1.2` also checks its values, beyond the signature: `degraded_reason` is a sorted, comma-joined list of distinct known codes (`DEGRADED_REASON_CODES`), present exactly when `degraded` is true, and `integrity_grade` is `A` when not degraded, else the worst grade of the codes.
+
+`result.form` (`'current'` / `'legacy-without-degraded'`) is still set for the two unversioned entries; prefer `result.version`.
+
+### Warnings
+
+A `hosted-v1.0` receipt that still carries a `degraded` value (`true`, `false`, or a `0`/`1` row export) verifies, because its signature is valid over the fields it does cover. But that `degraded` value was never signed, so the result flags it:
 
 ```ts
 const result = verifyReceiptSignature(receiptJson, signatureHex, publicKeyPem)
-// result.valid === true, result.form === 'legacy-without-degraded'
+// result.valid === true, result.version === 'hosted-v1.0'
 // result.unsigned_canonical_fields => ['degraded']
 // result.warnings =>
 // [{ code: 'UNSIGNED_DEGRADED', field: 'degraded',
 //    message: 'This receipt was signed before `degraded` was included in the signature. Its `degraded` value (true) was not signed and must not be trusted.' }]
 ```
 
-Check `result.warnings` (also lifted to the top level of `verifyReceiptByScheme`'s v1 result) before acting on `degraded`. `warnings` is an empty array on every other valid result: a current-form receipt, and a legacy receipt that carries no `degraded` value. A changed `degraded` on a current receipt is not a warning: it matches neither form and fails verification.
+An unversioned receipt (`hosted-v1.0` or `hosted-v1.1`) that displays `degraded_reason` or `integrity_grade` gets an `UNSIGNED_FIELD` warning per field: only `hosted-v1.2` signs them.
+
+Check `result.warnings` (also lifted to the top level of `verifyReceiptByScheme`'s v1 result) before acting on those fields. `warnings` is an empty array on every other valid result. A changed signed field is not a warning: it fails verification.
 
 Algorithm: **Ed25519** · Signature encoding: **128 hex chars (64 raw bytes)** · Public key: **PEM SPKI**, available at `GET <gateway>/verify/pubkey`.
 
