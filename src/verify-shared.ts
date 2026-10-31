@@ -195,6 +195,44 @@ export interface VerifyResult {
    * 'legacy-without-degraded' receipt). Do not trust these values.
    */
   unsigned_canonical_fields?: string[]
+  /**
+   * verifyReceiptSignature: warnings about a VALID result (empty when there are
+   * none; absent on an invalid result, where the failure is the signal). Today
+   * the only code is UNSIGNED_DEGRADED.
+   */
+  warnings?: VerifyWarning[]
+}
+
+/**
+ * Warning code: the receipt verified via the 'legacy-without-degraded' form
+ * (signed before gateway #253 bound `degraded`) but carries a `degraded`
+ * value. That value is not covered by the signature.
+ */
+export const UNSIGNED_DEGRADED = 'UNSIGNED_DEGRADED' as const
+
+export type VerifyWarningCode = typeof UNSIGNED_DEGRADED
+
+/** A machine-readable code plus a plain-text message for a human reader. */
+export interface VerifyWarning {
+  code:    VerifyWarningCode
+  /** The receipt field the warning is about. */
+  field:   string
+  message: string
+}
+
+/**
+ * The UNSIGNED_DEGRADED warning for a legacy receipt carrying `value`. Only
+ * call this when the receipt verified via 'legacy-without-degraded' AND
+ * carries a non-null `degraded`.
+ */
+export function unsignedDegradedWarning(value: unknown): VerifyWarning {
+  return {
+    code:    UNSIGNED_DEGRADED,
+    field:   'degraded',
+    message:
+      'This receipt was signed before `degraded` was included in the signature. ' +
+      `Its \`degraded\` value (${JSON.stringify(value)}) was not signed and must not be trusted.`,
+  }
 }
 
 /**
@@ -580,6 +618,8 @@ export interface VerifyBySchemeResult {
   reasons: string[]
   /** The underlying verifier result when one ran; absent on fail-closed. */
   detail?: VerifyResultV2 | VerifyResultGapSelfSign | VerifyResult
+  /** v1 path: the verifier's warnings (e.g. UNSIGNED_DEGRADED), lifted from detail. */
+  warnings?: VerifyWarning[]
 }
 
 /** The node-bound verifiers a build injects into the dispatcher factory. */
@@ -701,6 +741,7 @@ export function createVerifyReceiptByScheme(
         scheme:  'v1',
         reasons: res.valid ? [] : [res.reason ?? 'v1-signature-invalid'],
         detail:  res,
+        ...(res.warnings !== undefined ? { warnings: res.warnings } : {}),
       }
     }
 

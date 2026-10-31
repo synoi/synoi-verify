@@ -116,14 +116,36 @@ CLI above checks. It is not what a current gateway receipt carries: those are
 content core rather than a seven-field projection, and requires both an Ed25519
 and an ML-DSA-65 signature. See the browser table above for scheme coverage.
 
-Under v1, the signature covers exactly seven canonical fields, alphabetically sorted, JSON-stringified with default separators:
+Under v1, the signature covers the canonical fields the receipt carries, alphabetically sorted and JSON-stringified with default separators. Seven are required on every receipt:
 
 ```
 action_class, decision, oid_hex, receipt_id, recorded_at, risk_level, tenant_id
 ```
 
+Nineteen more are signed when present and omitted when absent (`degraded`, `sequence`, `gateway_manifest_sha256`, `policy_versions`, `approver_ref`, ...). The full list of 26 is vendored from synoi-gap in `vectors/canonical-receipt-fields.json` and exported as `ALL_CANONICAL_FIELDS`.
+
 Any other fields on the receipt (`latency_ms`, `intent_id`, `action_type`, etc.) are operational metadata and **not** part of the signature. Tampering with them won't fail verification, by design. This is the single most
 important limit of the v1 scheme, and it is why v2 exists.
+
+`verifyReceiptSignature` checks exactly two fixed forms, the same two the gateway's own `GET /verify/:id` checks, and reports which one verified in `result.form`:
+
+- `current`: `degraded` is signed as a boolean (absent is signed as `false`).
+- `legacy-without-degraded`: a receipt signed before the gateway bound `degraded` into the signature (gateway #253).
+
+### The `UNSIGNED_DEGRADED` warning
+
+A `legacy-without-degraded` receipt that still carries a `degraded` value (`true`, `false`, or a `0`/`1` row export) verifies, because its signature is valid over the fields it does cover. But that `degraded` value was never signed, so the result flags it:
+
+```ts
+const result = verifyReceiptSignature(receiptJson, signatureHex, publicKeyPem)
+// result.valid === true, result.form === 'legacy-without-degraded'
+// result.unsigned_canonical_fields => ['degraded']
+// result.warnings =>
+// [{ code: 'UNSIGNED_DEGRADED', field: 'degraded',
+//    message: 'This receipt was signed before `degraded` was included in the signature. Its `degraded` value (true) was not signed and must not be trusted.' }]
+```
+
+Check `result.warnings` (also lifted to the top level of `verifyReceiptByScheme`'s v1 result) before acting on `degraded`. `warnings` is an empty array on every other valid result: a current-form receipt, and a legacy receipt that carries no `degraded` value. A changed `degraded` on a current receipt is not a warning: it matches neither form and fails verification.
 
 Algorithm: **Ed25519** · Signature encoding: **128 hex chars (64 raw bytes)** · Public key: **PEM SPKI**, available at `GET <gateway>/verify/pubkey`.
 

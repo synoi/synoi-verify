@@ -1,5 +1,5 @@
 /**
- * test/unsigned-degraded-warning.test.ts — a legacy receipt's `degraded` value
+ * test/unsigned-degraded-warning.test.ts: a legacy receipt's `degraded` value
  * is flagged as unsigned.
  *
  * A receipt the hosted gateway signed before #253 has no `degraded` in its

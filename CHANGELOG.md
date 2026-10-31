@@ -23,6 +23,20 @@
   `VerifyResult.signed_fields`, and `VerifyResult.unsigned_canonical_fields`
   (set when a legacy receipt displays a `degraded` value its signature does
   not cover).
+- **`UNSIGNED_DEGRADED` warning.** `VerifyResult.warnings` is set on every
+  valid `verifyReceiptSignature` result (an empty array when there is nothing
+  to flag). When a receipt verifies via `legacy-without-degraded` and carries a
+  `degraded` value (`true`, `false`, or `0`/`1`), it holds
+  `{ code: 'UNSIGNED_DEGRADED', field: 'degraded', message }`, where the
+  message reads "This receipt was signed before `degraded` was included in the
+  signature. Its `degraded` value (...) was not signed and must not be
+  trusted." The receipt still verifies (founder decision 2026-10-30, matching
+  the gateway's own fallback). A legacy receipt with no `degraded` value and
+  every current-form receipt get no warning; a changed `degraded` on a current
+  receipt still fails. `verifyReceiptByScheme` lifts the v1 warnings to its
+  top-level `warnings`. New exports: `UNSIGNED_DEGRADED`,
+  `unsignedDegradedWarning`, and the types `VerifyWarning` and
+  `VerifyWarningCode`.
 - `ALL_CANONICAL_FIELDS`, `CANONICAL_FIELDS_SCHEMA_VERSION`, and
   `canonicalPayloadForms`.
 - A drift test (`test/hosted-canonical-fields.test.ts`) that fails if the

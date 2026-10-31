@@ -29,6 +29,7 @@ import {
   canonicalPayloadForms,
   createVerifyReceiptByScheme,
   type CanonicalFormCandidate,
+  unsignedDegradedWarning,
   V2_PAYLOAD_TYPE,
   type VerifyResult,
   type VerifyResultV2,
@@ -107,8 +108,9 @@ export function verifyEd25519Raw(
  *
  * Checks the two fixed forms from canonicalPayloadForms (the hosted gateway's
  * current form, then its legacy form without `degraded`), never subsets of
- * the signed fields. On success the result carries `form`, `signed_fields`
- * and, for a legacy receipt that displays `degraded`, `unsigned_canonical_fields`.
+ * the signed fields. On success the result carries `form`, `signed_fields`,
+ * `warnings` (empty unless flagged) and, for a legacy receipt that displays
+ * `degraded`, `unsigned_canonical_fields` plus an UNSIGNED_DEGRADED warning.
  *
  * Returns `{ valid: true }` on a verified signature, or
  * `{ valid: false, reason: '...' }` on any failure (with the current form's
@@ -137,6 +139,13 @@ export function verifyReceiptSignature(
   for (const f of forms) {
     const res = verifyEd25519Raw(f.canonical_payload, signatureHex, publicKeyPem)
     if (res.valid) {
+      // UNSIGNED_DEGRADED only when the LEGACY form verified and the receipt
+      // carries a `degraded` value (canonicalPayloadForms puts it in
+      // unsigned_canonical_fields exactly then). A tampered `degraded` on a
+      // current receipt matches neither form and never reaches here.
+      const warnings = f.unsigned_canonical_fields.includes('degraded')
+        ? [unsignedDegradedWarning(payload['degraded'])]
+        : []
       return {
         ...res,
         form:          f.form,
@@ -144,6 +153,7 @@ export function verifyReceiptSignature(
         ...(f.unsigned_canonical_fields.length > 0
           ? { unsigned_canonical_fields: f.unsigned_canonical_fields }
           : {}),
+        warnings,
       }
     }
     firstFailure ??= res
