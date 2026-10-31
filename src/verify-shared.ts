@@ -47,6 +47,12 @@
  * the signer's insertion-order JSON.stringify. Rejecting is fail-closed.
  */
 
+import {
+  LEGACY_REQUIRED_FIELDS,
+  OPTIONAL_FIELDS,
+  CANONICAL_FIELDS_SCHEMA_VERSION,
+} from './canonical-fields'
+
 /**
  * RFC 8785 (JCS) canonicalizer — a byte-for-byte port of
  * @synoi/sraid/src/canonicalize.ts. This is the single canonicalization
@@ -127,31 +133,42 @@ export function jcsCanonicalize(value: unknown): string {
 
 /**
  * Required canonical fields, sorted alphabetically. Every receipt must
- * include these for the signature to be reproducible.
+ * include these for the signature to be reproducible. Vendored from synoi-gap
+ * `schemas/canonical-receipt-fields.json` `legacy_required_fields`.
  */
-export const CANONICAL_FIELDS = [
-  'action_class',
-  'decision',
-  'oid_hex',
-  'receipt_id',
-  'recorded_at',
-  'risk_level',
-  'tenant_id',
-] as const
+export const CANONICAL_FIELDS = LEGACY_REQUIRED_FIELDS
 
 /**
  * Optional canonical fields added after the original scheme. Receipts MAY
  * include these; if they do, they participate in the signature; if they
  * don't, the canonical form omits them. This preserves backward-compat with
- * receipts signed before the field was introduced.
+ * receipts signed before the field was introduced. Vendored from synoi-gap
+ * `schemas/canonical-receipt-fields.json` `optional_fields`.
  *
  * `gateway_manifest_sha256` was added 2026-05-19 (Sprint 1.2 of the
- * RE-protection design) to cryptographically bind a receipt to the manifest
- * hash of the gateway code that signed it.
+ * RE-protection design); the rest track the hosted gateway's signer
+ * (verify-router.ts CANONICAL_FIELDS), e.g. `sequence` (#101) and `degraded`
+ * (#253).
  */
-export const OPTIONAL_CANONICAL_FIELDS = [
-  'gateway_manifest_sha256',
-] as const
+export const OPTIONAL_CANONICAL_FIELDS = OPTIONAL_FIELDS
+
+/** Every field the hosted gateway signs (required + optional), sorted. */
+export const ALL_CANONICAL_FIELDS: readonly string[] =
+  [...LEGACY_REQUIRED_FIELDS, ...OPTIONAL_FIELDS].sort()
+
+export { CANONICAL_FIELDS_SCHEMA_VERSION }
+
+/**
+ * Which signed form a v1 receipt verified under.
+ *   'current'                  the gateway's current form: `degraded` is bound
+ *                              (as a boolean; absent is signed as false).
+ *   'legacy-without-degraded'  a receipt signed before #253 bound `degraded`.
+ *                              Any `degraded` value it carries is NOT covered by
+ *                              the signature (see unsigned_canonical_fields).
+ * Older field sets need no form of their own: every other field is
+ * omit-when-absent, so an older receipt simply lacks the newer keys.
+ */
+export type CanonicalForm = 'current' | 'legacy-without-degraded'
 
 export interface ReceiptPayload {
   receipt_id:   string
@@ -168,6 +185,16 @@ export interface VerifyResult {
   canonical_payload: string
   algorithm:         'Ed25519'
   reason?:           string
+  /** verifyReceiptSignature: the signed form that verified (set only when valid). */
+  form?:             CanonicalForm
+  /** verifyReceiptSignature: the fields the verified signature covers, sorted. */
+  signed_fields?:    string[]
+  /**
+   * verifyReceiptSignature: canonical fields the receipt CARRIES that the
+   * verified signature does NOT cover (today only `degraded` on a
+   * 'legacy-without-degraded' receipt). Do not trust these values.
+   */
+  unsigned_canonical_fields?: string[]
 }
 
 /**
@@ -176,14 +203,74 @@ export interface VerifyResult {
  * fields contribute to the signature.
  *
  * Throws if any REQUIRED canonical field is missing. Optional canonical fields
- * (like gateway_manifest_sha256, introduced 2026-05-19) are included if
- * present and omitted otherwise — this preserves verification of receipts
- * signed before the optional fields existed.
+ * (gateway_manifest_sha256, sequence, degraded, ...) are included if present
+ * and omitted otherwise — this preserves verification of receipts signed
+ * before the optional fields existed. This is a pure projection: it does NOT
+ * apply the gateway's `degraded` rule; canonicalPayloadForms does.
  */
 export function canonicalPayload(payload: Record<string, unknown>): string {
+  return jcsCanonicalize(canonicalProjection(payload))
+}
+
+/** One fixed signed form of a v1 receipt; see canonicalPayloadForms. */
+export interface CanonicalFormCandidate {
+  form:                      CanonicalForm
+  canonical_payload:         string
+  signed_fields:             string[]
+  unsigned_canonical_fields: string[]
+}
+
+/**
+ * The gateway signs `degraded: !!receipt.degraded` (verify-router.ts, #253):
+ * absent or null is signed as false. Store rows export it as 0/1. Anything
+ * else is not a value the gateway signs, so reject it (fail-closed) rather
+ * than coerce a string like "false" to true.
+ */
+function signedDegraded(value: unknown): boolean {
+  if (value === undefined || value === null || value === false || value === 0) return false
+  if (value === true || value === 1) return true
+  throw new Error(
+    `canonicalPayloadForms: 'degraded' must be a boolean (or 0/1); got ${JSON.stringify(value)}`,
+  )
+}
+
+/**
+ * The canonical bytes a v1 receipt may have been signed over, in the order
+ * the hosted gateway checks them (verify-router.ts GET /verify/:id):
+ *
+ *   1. 'current'                  all canonical fields, `degraded` bound as a boolean
+ *   2. 'legacy-without-degraded'  the same projection minus `degraded` (pre-#253)
+ *
+ * Exactly these two FIXED forms, never subsets of the signed fields: an
+ * attacker who drops a signed field (e.g. `sequence`, or `degraded: true`)
+ * gets bytes that match neither form. Throws like canonicalPayload, and on a
+ * `degraded` value the gateway cannot have signed.
+ */
+export function canonicalPayloadForms(payload: Record<string, unknown>): CanonicalFormCandidate[] {
+  const current = canonicalProjection({ ...payload, degraded: signedDegraded(payload['degraded']) })
+  const legacyInput = { ...payload }
+  delete legacyInput['degraded']
+  const legacy = canonicalProjection(legacyInput)
+  const carriesDegraded = payload['degraded'] !== undefined && payload['degraded'] !== null
+  return [
+    {
+      form:                      'current',
+      canonical_payload:         jcsCanonicalize(current),
+      signed_fields:             Object.keys(current).sort(),
+      unsigned_canonical_fields: [],
+    },
+    {
+      form:                      'legacy-without-degraded',
+      canonical_payload:         jcsCanonicalize(legacy),
+      signed_fields:             Object.keys(legacy).sort(),
+      unsigned_canonical_fields: carriesDegraded ? ['degraded'] : [],
+    },
+  ]
+}
+
+function canonicalProjection(payload: Record<string, unknown>): Record<string, unknown> {
   const obj: Record<string, unknown> = {}
-  const allKeys = [...CANONICAL_FIELDS, ...OPTIONAL_CANONICAL_FIELDS].sort()
-  for (const key of allKeys) {
+  for (const key of ALL_CANONICAL_FIELDS) {
     const isRequired = (CANONICAL_FIELDS as readonly string[]).includes(key)
     const val = payload[key]
     // The gateway signer omits a canonical field that is absent OR explicitly
@@ -211,10 +298,11 @@ export function canonicalPayload(payload: Record<string, unknown>): string {
     }
     obj[key] = val
   }
-  // ONE canonical truth: RFC 8785 JCS, byte-identical to the @synoi/sraid
-  // signer. On the scalar projection above, JCS == the signer's JSON.stringify
-  // (proven by synoi-conformance cof/verify.canonical.v1.vectors.json).
-  return jcsCanonicalize(obj)
+  // Callers serialize with jcsCanonicalize — ONE canonical truth: RFC 8785 JCS,
+  // byte-identical to the @synoi/sraid signer. On this scalar projection, JCS
+  // == the gateway signer's JSON.stringify (proven by synoi-conformance
+  // cof/verify.canonical.v1.vectors.json).
+  return obj
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

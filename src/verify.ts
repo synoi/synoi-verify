@@ -26,8 +26,9 @@
 
 import { verify, createPublicKey } from 'node:crypto'
 import {
-  canonicalPayload,
+  canonicalPayloadForms,
   createVerifyReceiptByScheme,
+  type CanonicalFormCandidate,
   V2_PAYLOAD_TYPE,
   type VerifyResult,
   type VerifyResultV2,
@@ -104,8 +105,14 @@ export function verifyEd25519Raw(
  * @param signatureHex  64-byte Ed25519 signature, hex-encoded
  * @param publicKeyPem  the gateway's public key in PEM/SPKI format
  *
+ * Checks the two fixed forms from canonicalPayloadForms (the hosted gateway's
+ * current form, then its legacy form without `degraded`), never subsets of
+ * the signed fields. On success the result carries `form`, `signed_fields`
+ * and, for a legacy receipt that displays `degraded`, `unsigned_canonical_fields`.
+ *
  * Returns `{ valid: true }` on a verified signature, or
- * `{ valid: false, reason: '...' }` on any failure. Never throws.
+ * `{ valid: false, reason: '...' }` on any failure (with the current form's
+ * canonical_payload). Never throws.
  *
  * NODE-ONLY: uses node:crypto. This is the v1 legacy path. Browser bundles use
  * @synoi/verify/browser, which does not include this function.
@@ -115,9 +122,9 @@ export function verifyReceiptSignature(
   signatureHex:  string,
   publicKeyPem:  string,
 ): VerifyResult {
-  let canonical: string
+  let forms: CanonicalFormCandidate[]
   try {
-    canonical = canonicalPayload(payload)
+    forms = canonicalPayloadForms(payload)
   } catch (err) {
     return {
       valid:             false,
@@ -126,7 +133,22 @@ export function verifyReceiptSignature(
       reason:            (err as Error).message,
     }
   }
-  return verifyEd25519Raw(canonical, signatureHex, publicKeyPem)
+  let firstFailure: VerifyResult | undefined
+  for (const f of forms) {
+    const res = verifyEd25519Raw(f.canonical_payload, signatureHex, publicKeyPem)
+    if (res.valid) {
+      return {
+        ...res,
+        form:          f.form,
+        signed_fields: f.signed_fields,
+        ...(f.unsigned_canonical_fields.length > 0
+          ? { unsigned_canonical_fields: f.unsigned_canonical_fields }
+          : {}),
+      }
+    }
+    firstFailure ??= res
+  }
+  return firstFailure as VerifyResult
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
