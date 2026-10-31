@@ -27,15 +27,18 @@ function ok(label: string, cond: boolean, detail?: string): void {
 
 // The gateway signer's EXACT v1 canonical form: flat JSON.stringify over the
 // sorted scalar projection, omitting undefined/null. Mirror of
-// verify-router.ts:canonicalPayload.
-const CANONICAL_FIELDS = [
-  'action_class', 'decision', 'oid_hex', 'receipt_id',
-  'recorded_at', 'risk_level', 'tenant_id',
+// verify-router.ts:canonicalPayload (the gateway's 26-field CANONICAL_FIELDS).
+const GATEWAY_CANONICAL_FIELDS = [
+  'action_class', 'action_payload_hash', 'approver_ref', 'cited_oracle_inputs',
+  'decision', 'decision_subject_oid', 'degraded', 'gateway_manifest_sha256',
+  'grant_oid', 'intent_oid', 'oid_hex', 'policy_versions', 'prev', 'receipt_id',
+  'recorded_at', 'replayed_after', 'risk_level', 'rule_id', 'sequence',
+  'session_id', 'state_sha256', 'status', 'subject_oid', 'target_class',
+  'target_id', 'tenant_id',
 ]
-const OPTIONAL = ['gateway_manifest_sha256']
 function signerFlatCanonical(payload: Record<string, unknown>): string {
   const obj: Record<string, unknown> = {}
-  for (const k of [...CANONICAL_FIELDS, ...OPTIONAL].sort()) {
+  for (const k of [...GATEWAY_CANONICAL_FIELDS].sort()) {
     const v = payload[k]
     if (v !== undefined && v !== null) obj[k] = v
   }
@@ -113,6 +116,8 @@ async function main(): Promise<void> {
     ['large-int recorded_at (MAX_SAFE)', base({ recorded_at: 9007199254740991 })],
     ['with manifest', base({ gateway_manifest_sha256: 'sha256:' + 'be'.repeat(32) })],
     ['null authority field omitted', base({ gateway_manifest_sha256: null })],
+    ['hosted risk receipt (degraded, sequence)', base({ degraded: false, sequence: 42, session_id: 's1' })],
+    ['policy_versions as JSON string', base({ policy_versions: '[{"id":"p","version":2}]', grant_oid: null })],
     // non-canonical noise fields must not appear
     ['noise ignored', base({ latency_ms: 999, intent_id: 'x' })],
   ]
