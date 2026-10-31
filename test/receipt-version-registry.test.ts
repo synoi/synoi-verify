@@ -56,7 +56,7 @@ const V1_1_FIELDS = [
   'target_id', 'tenant_id',
 ]
 const V1_0_FIELDS = V1_1_FIELDS.filter((f) => f !== 'degraded')
-const V1_2_FIELDS = [...V1_1_FIELDS, 'degraded_reason', 'integrity_grade', 'schema_version']
+const V1_2_FIELDS = [...V1_1_FIELDS, 'agent_id', 'degraded_reason', 'integrity_grade', 'owner_oid', 'schema_version']
 
 function canonicalOver(fields: string[], payload: Record<string, unknown>): string {
   const obj: Record<string, unknown> = {}
@@ -118,19 +118,17 @@ const e12 = getReceiptVersion('hosted-v1.2')
 ok('hosted-v1.0: unversioned, legacy, warns UNSIGNED_DEGRADED',
    e10?.family === 'hosted-flat' && e10.schema_version === null && e10.status === 'legacy' &&
    e10.warnings.includes(UNSIGNED_DEGRADED), e10)
-ok('hosted-v1.1: unversioned, current (what gateway main emits today)',
-   e11?.family === 'hosted-flat' && e11.schema_version === null && e11.status === 'current', e11)
-ok('hosted-v1.2: explicit schema_version "hosted-v1.2", status proposed',
+ok('hosted-v1.1: unversioned, legacy (superseded by hosted-v1.2)',
+   e11?.family === 'hosted-flat' && e11.schema_version === null && e11.status === 'legacy', e11)
+ok('hosted-v1.2: explicit schema_version "hosted-v1.2", status current',
    e12?.family === 'hosted-flat' && e12.schema_version === HOSTED_V1_2_SCHEMA_VERSION &&
-   HOSTED_V1_2_SCHEMA_VERSION === 'hosted-v1.2' && e12.status === 'proposed', e12)
-ok('hosted-v1.2: description says it is not yet emitted by the gateway',
-   /not yet emitted by the gateway/i.test(e12?.description ?? ''), e12?.description)
+   HOSTED_V1_2_SCHEMA_VERSION === 'hosted-v1.2' && e12.status === 'current', e12)
 const fieldsOf = (e: typeof e10): string[] =>
   e && e.family === 'hosted-flat' ? [...e.required_fields, ...e.optional_fields].sort() : []
 ok('hosted-v1.0 signed fields = the 26 minus degraded', JSON.stringify(fieldsOf(e10)) === JSON.stringify([...V1_0_FIELDS].sort()), fieldsOf(e10))
 ok('hosted-v1.1 signed fields = the vendored 26', JSON.stringify(fieldsOf(e11)) === JSON.stringify([...V1_1_FIELDS].sort()) &&
    JSON.stringify(fieldsOf(e11)) === JSON.stringify([...ALL_CANONICAL_FIELDS].sort()), fieldsOf(e11))
-ok('hosted-v1.2 signed fields = the 26 + degraded_reason, integrity_grade, schema_version',
+ok('hosted-v1.2 signed fields = the 26 + agent_id, degraded_reason, integrity_grade, owner_oid, schema_version',
    JSON.stringify(fieldsOf(e12)) === JSON.stringify([...V1_2_FIELDS].sort()), fieldsOf(e12))
 ok('hosted-v1.2 requires schema_version, degraded, integrity_grade',
    e12?.family === 'hosted-flat' && ['schema_version', 'degraded', 'integrity_grade'].every((f) => e12.required_fields.includes(f)), e12)
