@@ -129,9 +129,10 @@ ok('hosted-v1.3 degraded_rule required, no unsigned display fields',
      JSON.stringify(v.required_fields) === JSON.stringify(V1_3_REQUIRED) &&
      JSON.stringify([...v.required_fields, ...v.optional_fields].sort()) === JSON.stringify([...V1_3_FIELDS].sort()), v)
 }
-ok('registry hosted ids: v1.0, v1.1, v1.2, v1.3',
+// C1 appended hosted-v1.4 (approver-bound) after hosted-v1.3.
+ok('registry hosted ids: v1.0, v1.1, v1.2, v1.3 (then v1.4)',
    JSON.stringify(RECEIPT_VERSION_REGISTRY.filter((e) => e.family === 'hosted-flat').map((e) => e.id)) ===
-   JSON.stringify(['hosted-v1.0', 'hosted-v1.1', 'hosted-v1.2', 'hosted-v1.3']))
+   JSON.stringify(['hosted-v1.0', 'hosted-v1.1', 'hosted-v1.2', 'hosted-v1.3', 'hosted-v1.4']))
 
 // ── 3. Positive ─────────────────────────────────────────────────────────────
 const r13 = verifyReceiptSignature(v13, sig13, pubPem)
@@ -174,7 +175,8 @@ for (const g of ['', 7, true]) {
 }
 
 // ── 5. Unknown versions fail closed ─────────────────────────────────────────
-for (const bad of ['hosted-v1.4', 'hosted-v1.30', 'HOSTED-V1.3', '']) {
+// hosted-v1.4 is registered since C1, so the unknown example is hosted-v1.5.
+for (const bad of ['hosted-v1.5', 'hosted-v1.30', 'HOSTED-V1.3', '']) {
   const r = verifyReceiptSignature({ ...v13, schema_version: bad }, sig13, pubPem)
   ok(`unknown schema_version ${JSON.stringify(bad)} fails closed`, !r.valid && /unknown-schema-version/.test(r.reason ?? ''), r.reason)
 }

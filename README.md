@@ -195,6 +195,18 @@ Every list in the registry is vendored from synoi-gap `schemas/receipt-versions.
 
 The version name `hosted-v1.3` is ASSUMED. Receipt-version naming is still open against draft gateway #184.
 
+### Update, 2026-11-01 (C1): `hosted-v1.4` for approver-bound receipts, and version names
+
+**`hosted-v1.4` (status `current`).** It signs the `hosted-v1.3` field list plus `approver_oid`, and follows the `hosted-v1.2` value rules. `approver_oid` is **required**. It is the enrolled operator OID (`oid-` + 64 lowercase hex, the identity `owner_oid` uses) of the human who made the approval decision the receipt records. `grant_oid` is optional, as in `hosted-v1.2` (ASSUMED). The gateway emits it only when it authenticated that operator. Every other receipt keeps its earlier version.
+
+- Changing, dropping or reformatting `approver_oid` fails verification.
+- A receipt that carries `approver_oid` under `hosted-v1.0` to `hosted-v1.3` **fails** (`REFUSED_WHEN_UNSIGNED`). There is no `UNSIGNED_FIELD` warning for it, because none of those versions can sign it.
+- `hosted-v1.0` to `hosted-v1.3` receipts without `approver_oid` verify exactly as before.
+
+**Version names.** A result names the form that verified by its registry id, in `version` (`hosted-v1.0` ... `hosted-v1.4`). The older `form` label (`current` = hosted-v1.1, `legacy-without-degraded` = hosted-v1.0) is kept read-only on unversioned results for existing callers. It gets no new values.
+
+The name `hosted-v1.4` is ASSUMED, and so is the choice of `approver_oid` identity (see the gateway's `docs/RECEIPT_VERSIONS.md` section 10).
+
 ## Fully offline
 
 The promise of the SynOI Decision Receipt is "verifiable by anyone, without SynOI

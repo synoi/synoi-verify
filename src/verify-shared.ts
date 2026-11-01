@@ -174,6 +174,10 @@ export { CANONICAL_FIELDS_SCHEMA_VERSION }
  *   'current'                  = hosted-v1.1 (`degraded` bound as a boolean)
  *   'legacy-without-degraded'  = hosted-v1.0 (signed before #253 bound it)
  * A versioned receipt (hosted-v1.2) has no `form`.
+ * C1 (I7 decision 2): every label surface names the form by its registry id
+ * (`VerifyResult.version`: hosted-v1.0 ... hosted-v1.4). `form` is a
+ * READ-ONLY backwards-compatibility alias, set on the two unversioned ids
+ * only; it gains no values for later versions. Do not use it in new code.
  */
 export type CanonicalForm = 'current' | 'legacy-without-degraded'
 
