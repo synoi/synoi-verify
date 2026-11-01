@@ -140,10 +140,11 @@ ok('gap-selfsign: keyed by receipt_scheme synoi.receipt/gap-selfsign',
    lite?.family === 'gap-cdro' && lite.receipt_scheme === 'synoi.receipt/gap-selfsign', lite)
 ok('unknown id: getReceiptVersion returns undefined', getReceiptVersion('hosted-v9') === undefined)
 
-ok('reason codes: the seven derived from the gateway code',
+// F2: six, not seven (trust_token_unverified folded into trust_token_absent).
+ok('reason codes: the six derived from the gateway code',
    JSON.stringify(Object.keys(DEGRADED_REASON_CODES).sort()) === JSON.stringify([
      'manifest_missing', 'modified_code', 'resilience_fallback', 'trust_token_absent',
-     'trust_token_expired', 'trust_token_flagged', 'trust_token_unverified']),
+     'trust_token_expired', 'trust_token_flagged']),
    Object.keys(DEGRADED_REASON_CODES))
 ok('grades: A, B, C, D', JSON.stringify(INTEGRITY_GRADES) === JSON.stringify(['A', 'B', 'C', 'D']), INTEGRITY_GRADES)
 
