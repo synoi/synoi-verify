@@ -180,6 +180,21 @@ Each one is left out of the signed bytes when the gateway does not know it (abse
 
 Every list in the registry is vendored from synoi-gap `schemas/receipt-versions.json`, copied verbatim to `vectors/receipt-versions.json`, and `test/receipt-version-v1-2.test.ts` fails if they drift. The list covers the per-version signed fields, the `degraded_reason` codes and the grades.
 
+### Update, 2026-10-31 (F2): six reason codes, and `hosted-v1.3` for grant-bound receipts
+
+**Six `degraded_reason` codes, not seven.** `trust_token_unverified` is gone. A token whose control-plane status is unclear is now reported as `trust_token_absent`, at the same grade (B). The codes are `manifest_missing`, `modified_code`, `resilience_fallback` (D), `trust_token_flagged` (C), and `trust_token_absent`, `trust_token_expired` (B). This changes the unreleased hosted-v1.2 vocabulary before any hosted-v1.2 receipt reached production (ASSUMED from the gateway lanes' records), so it is not a new version. A hosted-v1.2 receipt naming `trust_token_unverified` now fails the value rules.
+
+**`hosted-v1.3` (status `current`).** It signs the same fields as `hosted-v1.2` and follows the same value rules, but `grant_oid` is **required** and must be a non-empty string. The gateway emits it for a receipt that carries a capability grant (an A2A delegation). Every other receipt stays `hosted-v1.2`.
+
+`grant_oid` was already an optional signed field in every earlier version. What changed is the gateway's A2A signer, which used to store `grant_oid` without signing it. Each version is still checked against its own list:
+
+- `hosted-v1.0`, `v1.1` and `v1.2` receipts verify exactly as before.
+- A `hosted-v1.3` receipt relabelled `hosted-v1.2`, or stripped of its version fields, does not verify.
+- An unknown `schema_version` fails closed.
+- An A2A receipt that shows a `grant_oid` its signature never covered still fails. The verifier does not drop that field to make the receipt pass.
+
+The version name `hosted-v1.3` is ASSUMED. Receipt-version naming is still open against draft gateway #184.
+
 ## Fully offline
 
 The promise of the SynOI Decision Receipt is "verifiable by anyone, without SynOI
