@@ -1,0 +1,36 @@
+{
+  "$comment": "Single source of truth for the SynOI Decision Receipt canonical signing field list -- the exact field set that participates in the Ed25519 / hybrid ML-DSA signature seal, under omit-when-absent semantics (a field missing or null is excluded from the canonical form, not an error, EXCEPT the legacy_required_fields below, which a signer/verifier may treat as hard-required). Consumed by synoi-gateway (src/verify-router.ts CANONICAL_FIELDS) and synoi-control (src/receipts/verify-signature.ts CANONICAL_FIELDS + OPTIONAL_CANONICAL_FIELDS). Both repos vendor their own runtime copy of this list as a literal array -- gateway is a long-running service, control is an AWS Lambda deploy, neither can read a sibling repo's directory at runtime -- so this file is read at TEST time only, by a drift-tripwire test in each repo's suite that fails CI when a repo's vendored copy falls out of parity with this list. Do not add a field here without updating BOTH repos' vendored copies in the same change.",
+  "version": 1,
+  "legacy_required_fields": [
+    "action_class",
+    "decision",
+    "oid_hex",
+    "receipt_id",
+    "recorded_at",
+    "risk_level",
+    "tenant_id"
+  ],
+  "optional_fields": [
+    "action_payload_hash",
+    "approver_ref",
+    "cited_oracle_inputs",
+    "decision_subject_oid",
+    "degraded",
+    "gateway_manifest_sha256",
+    "grant_oid",
+    "intent_oid",
+    "policy_versions",
+    "prev",
+    "replayed_after",
+    "rule_id",
+    "sequence",
+    "session_id",
+    "state_sha256",
+    "status",
+    "subject_oid",
+    "target_class",
+    "target_id"
+  ],
+  "hybrid_required": false,
+  "hybrid_required_note": "Whether the RECEIPT SIGNATURE SCHEME requires the ML-DSA-65 hybrid component to be present for a receipt to verify (not a per-field flag). Currently false: an Ed25519-only signature is still accepted for pre-K1 receipts. Gateway's own cutover check (isPostCutoverDowngrade, src/verify-router.ts) already hard-fails a post-K1 Ed25519-only receipt at the gateway's own /verify surface. synoi-control currently verifies Ed25519 only at its ingest gate (src/receipts/verify-signature.ts, documented, deliberately out of scope for the canonical-field-drift fix that added this file) -- ML-DSA-65 verification at the control ingest gate is a separate follow-up. When that ships, flip this flag to true and update control's verifyReceiptBlob to also check ml_dsa_signature."
+}

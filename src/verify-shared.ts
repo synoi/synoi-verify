@@ -47,6 +47,22 @@
  * the signer's insertion-order JSON.stringify. Rejecting is fail-closed.
  */
 
+import {
+  LEGACY_REQUIRED_FIELDS,
+  OPTIONAL_FIELDS,
+  CANONICAL_FIELDS_SCHEMA_VERSION,
+} from './canonical-fields'
+import {
+  canonicalForEntry,
+  getReceiptVersion,
+  type HostedVersionId,
+  type VersionCanonical,
+  type VerifyWarning,
+} from './receipt-versions'
+
+// The version registry and its warning vocabulary are part of the shared surface.
+export * from './receipt-versions'
+
 /**
  * RFC 8785 (JCS) canonicalizer — a byte-for-byte port of
  * @synoi/sraid/src/canonicalize.ts. This is the single canonicalization
@@ -127,31 +143,39 @@ export function jcsCanonicalize(value: unknown): string {
 
 /**
  * Required canonical fields, sorted alphabetically. Every receipt must
- * include these for the signature to be reproducible.
+ * include these for the signature to be reproducible. Vendored from synoi-gap
+ * `schemas/canonical-receipt-fields.json` `legacy_required_fields`.
  */
-export const CANONICAL_FIELDS = [
-  'action_class',
-  'decision',
-  'oid_hex',
-  'receipt_id',
-  'recorded_at',
-  'risk_level',
-  'tenant_id',
-] as const
+export const CANONICAL_FIELDS = LEGACY_REQUIRED_FIELDS
 
 /**
  * Optional canonical fields added after the original scheme. Receipts MAY
  * include these; if they do, they participate in the signature; if they
  * don't, the canonical form omits them. This preserves backward-compat with
- * receipts signed before the field was introduced.
+ * receipts signed before the field was introduced. Vendored from synoi-gap
+ * `schemas/canonical-receipt-fields.json` `optional_fields`.
  *
  * `gateway_manifest_sha256` was added 2026-05-19 (Sprint 1.2 of the
- * RE-protection design) to cryptographically bind a receipt to the manifest
- * hash of the gateway code that signed it.
+ * RE-protection design); the rest track the hosted gateway's signer
+ * (verify-router.ts CANONICAL_FIELDS), e.g. `sequence` (#101) and `degraded`
+ * (#253).
  */
-export const OPTIONAL_CANONICAL_FIELDS = [
-  'gateway_manifest_sha256',
-] as const
+export const OPTIONAL_CANONICAL_FIELDS = OPTIONAL_FIELDS
+
+/** Every field the hosted gateway signs (required + optional), sorted. */
+export const ALL_CANONICAL_FIELDS: readonly string[] =
+  [...LEGACY_REQUIRED_FIELDS, ...OPTIONAL_FIELDS].sort()
+
+export { CANONICAL_FIELDS_SCHEMA_VERSION }
+
+/**
+ * The PR #1 label for the two UNVERSIONED registry entries, kept on results so
+ * existing callers keep working. Prefer `VerifyResult.version`.
+ *   'current'                  = hosted-v1.1 (`degraded` bound as a boolean)
+ *   'legacy-without-degraded'  = hosted-v1.0 (signed before #253 bound it)
+ * A versioned receipt (hosted-v1.2) has no `form`.
+ */
+export type CanonicalForm = 'current' | 'legacy-without-degraded'
 
 export interface ReceiptPayload {
   receipt_id:   string
@@ -168,6 +192,24 @@ export interface VerifyResult {
   canonical_payload: string
   algorithm:         'Ed25519'
   reason?:           string
+  /** verifyReceiptSignature: the registry version that verified (set only when valid). */
+  version?:          HostedVersionId
+  /** verifyReceiptSignature: PR #1 label of an unversioned version (see CanonicalForm). */
+  form?:             CanonicalForm
+  /** verifyReceiptSignature: the fields the verified signature covers, sorted. */
+  signed_fields?:    string[]
+  /**
+   * verifyReceiptSignature: fields the receipt CARRIES that the verified
+   * version does NOT sign (e.g. `degraded` on hosted-v1.0, `degraded_reason`
+   * on hosted-v1.0/v1.1). Do not trust these values.
+   */
+  unsigned_canonical_fields?: string[]
+  /**
+   * verifyReceiptSignature: warnings about a VALID result (empty when there are
+   * none; absent on an invalid result, where the failure is the signal). Codes:
+   * UNSIGNED_DEGRADED, UNSIGNED_FIELD. Each version lists the codes it may emit.
+   */
+  warnings?: VerifyWarning[]
 }
 
 /**
@@ -176,14 +218,36 @@ export interface VerifyResult {
  * fields contribute to the signature.
  *
  * Throws if any REQUIRED canonical field is missing. Optional canonical fields
- * (like gateway_manifest_sha256, introduced 2026-05-19) are included if
- * present and omitted otherwise — this preserves verification of receipts
- * signed before the optional fields existed.
+ * (gateway_manifest_sha256, sequence, degraded, ...) are included if present
+ * and omitted otherwise — this preserves verification of receipts signed
+ * before the optional fields existed. This is a pure projection over the
+ * vendored 26 fields: it applies no version's rules. To get the bytes a given
+ * version signs, use canonicalPayloadForVersion.
  */
 export function canonicalPayload(payload: Record<string, unknown>): string {
+  return jcsCanonicalize(canonicalProjection(payload))
+}
+
+/**
+ * The exact bytes the hosted-flat registry version `versionId` signs for this
+ * receipt (see ./receipt-versions). Throws on an unknown or non-flat id, a
+ * missing required field, a non-scalar signed field, or a `degraded` value
+ * that version cannot have signed.
+ */
+export function canonicalPayloadForVersion(
+  payload:   Record<string, unknown>,
+  versionId: string,
+): VersionCanonical {
+  const entry = getReceiptVersion(versionId)
+  if (!entry || entry.family !== 'hosted-flat') {
+    throw new Error(`canonicalPayloadForVersion: unknown hosted receipt version ${JSON.stringify(versionId)}`)
+  }
+  return canonicalForEntry(payload, entry, jcsCanonicalize)
+}
+
+function canonicalProjection(payload: Record<string, unknown>): Record<string, unknown> {
   const obj: Record<string, unknown> = {}
-  const allKeys = [...CANONICAL_FIELDS, ...OPTIONAL_CANONICAL_FIELDS].sort()
-  for (const key of allKeys) {
+  for (const key of ALL_CANONICAL_FIELDS) {
     const isRequired = (CANONICAL_FIELDS as readonly string[]).includes(key)
     const val = payload[key]
     // The gateway signer omits a canonical field that is absent OR explicitly
@@ -211,10 +275,11 @@ export function canonicalPayload(payload: Record<string, unknown>): string {
     }
     obj[key] = val
   }
-  // ONE canonical truth: RFC 8785 JCS, byte-identical to the @synoi/sraid
-  // signer. On the scalar projection above, JCS == the signer's JSON.stringify
-  // (proven by synoi-conformance cof/verify.canonical.v1.vectors.json).
-  return jcsCanonicalize(obj)
+  // Callers serialize with jcsCanonicalize — ONE canonical truth: RFC 8785 JCS,
+  // byte-identical to the @synoi/sraid signer. On this scalar projection, JCS
+  // == the gateway signer's JSON.stringify (proven by synoi-conformance
+  // cof/verify.canonical.v1.vectors.json).
+  return obj
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -492,6 +557,8 @@ export interface VerifyBySchemeResult {
   reasons: string[]
   /** The underlying verifier result when one ran; absent on fail-closed. */
   detail?: VerifyResultV2 | VerifyResultGapSelfSign | VerifyResult
+  /** v1 path: the verifier's warnings (e.g. UNSIGNED_DEGRADED), lifted from detail. */
+  warnings?: VerifyWarning[]
 }
 
 /** The node-bound verifiers a build injects into the dispatcher factory. */
@@ -613,6 +680,7 @@ export function createVerifyReceiptByScheme(
         scheme:  'v1',
         reasons: res.valid ? [] : [res.reason ?? 'v1-signature-invalid'],
         detail:  res,
+        ...(res.warnings !== undefined ? { warnings: res.warnings } : {}),
       }
     }
 
