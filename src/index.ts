@@ -17,6 +17,7 @@ export {
   resolveHostedVersions,
   checkVersionSemantics,
   HOSTED_V1_2_SCHEMA_VERSION,
+  HOSTED_V1_3_SCHEMA_VERSION,
   DEGRADED_REASON_CODES,
   INTEGRITY_GRADES,
   AGENT_REGISTRY_FIELDS,

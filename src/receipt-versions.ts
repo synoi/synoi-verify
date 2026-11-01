@@ -114,10 +114,19 @@ export const DEGRADED_REASON_CODES: Readonly<Record<string, Exclude<IntegrityGra
   modified_code:          'D',
   resilience_fallback:    'D',
   trust_token_flagged:    'C',
+  // F2: also covers a token whose control-plane status is unclear ('unknown'),
+  // formerly its own code (trust_token_unverified).
   trust_token_absent:     'B',
   trust_token_expired:    'B',
-  trust_token_unverified: 'B',
 })
+
+/**
+ * F2: the `schema_version` of a grant-bound receipt. hosted-v1.3 signs the
+ * hosted-v1.2 field set with `grant_oid` REQUIRED; the gateway emits it for a
+ * receipt that carries a capability grant (A2A delegation). `grant_oid` stays
+ * optional (signed when present) in every earlier version.
+ */
+export const HOSTED_V1_3_SCHEMA_VERSION = 'hosted-v1.3' as const
 
 /**
  * Optional hosted-v1.2 fields reserved for the agent registry: signed when
@@ -177,7 +186,7 @@ export interface GapCdroVersionEntry extends VersionEntryBase {
 }
 
 export type ReceiptVersionEntry = HostedFlatVersionEntry | GapCdroVersionEntry
-export type HostedVersionId = 'hosted-v1.0' | 'hosted-v1.1' | 'hosted-v1.2'
+export type HostedVersionId = 'hosted-v1.0' | 'hosted-v1.1' | 'hosted-v1.2' | 'hosted-v1.3'
 
 const OPTIONAL_WITHOUT_DEGRADED = OPTIONAL_FIELDS.filter((f) => f !== 'degraded')
 const FLAT_CANON = 'flat-scalar-jcs: JCS over the present, non-null signed fields, keys sorted, scalars only'
@@ -237,6 +246,23 @@ export const RECEIPT_VERSION_REGISTRY: readonly ReceiptVersionEntry[] = Object.f
       '`degraded` on every path including the guard, integrity_grade (A-D), degraded_reason ' +
       '(sorted comma-joined codes) exactly when degraded, and, when the gateway knows them, ' +
       'the agent registry fields agent_id and owner_oid.',
+  },
+  {
+    id:                'hosted-v1.3',
+    family:            'hosted-flat',
+    schema_version:    HOSTED_V1_3_SCHEMA_VERSION,
+    status:            'current',
+    required_fields:   [...LEGACY_REQUIRED_FIELDS, 'degraded', 'grant_oid', 'integrity_grade', 'schema_version'],
+    optional_fields:   [...OPTIONAL_WITHOUT_DEGRADED.filter((f) => f !== 'grant_oid'), 'degraded_reason', 'agent_id', 'owner_oid'],
+    degraded_rule:     'required',
+    display_unsigned:  [],
+    canonicalization:  FLAT_CANON,
+    signature_schemes: FLAT_SIGS,
+    warnings:          [],
+    description:
+      'Grant-bound hosted receipt (F2): the hosted-v1.2 field set and value rules, with grant_oid ' +
+      'required. What synoi-gateway emits for a receipt that carries a capability grant (A2A ' +
+      'delegation); receipts without a grant stay hosted-v1.2.',
   },
   {
     id:                'gap-v2-dsse',
@@ -389,10 +415,17 @@ export function warningsForEntry(payload: Record<string, unknown>, entry: Hosted
  *   - degraded_reason is present exactly when degraded is true
  *   - degraded_reason is a sorted, comma-joined list of distinct known codes
  *   - integrity_grade is A when not degraded, else the worst grade of the codes
+ * hosted-v1.3 has the same rules, and its grant_oid must be a non-empty string.
  * Returns a reason string on the first violation, or null.
  */
 export function checkVersionSemantics(payload: Record<string, unknown>, entry: HostedFlatVersionEntry): string | null {
-  if (entry.id !== 'hosted-v1.2') return null
+  if (entry.id !== 'hosted-v1.2' && entry.id !== 'hosted-v1.3') return null
+  if (entry.id === 'hosted-v1.3') {
+    const g = payload['grant_oid']
+    if (typeof g !== 'string' || g === '') {
+      return `${entry.id}: grant_oid must be a non-empty string; got ${JSON.stringify(g)}`
+    }
+  }
   // Agent registry fields: absent/null = unknown; when present, a non-empty string.
   for (const f of AGENT_REGISTRY_FIELDS) {
     const v = payload[f]

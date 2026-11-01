@@ -1,5 +1,5 @@
 {
-  "$comment": "Hosted (flat) SynOI Decision Receipt versions: the exact signed-field list of each version, keyed by version, plus the hosted-v1.2 degraded_reason codes and integrity_grade enum. A verifier checks each receipt against exactly ONE entry: a receipt carrying schema_version uses the entry whose schema_version equals it, and an unknown value fails closed; a receipt without schema_version is unversioned legacy and tries unversioned_order (their canonical bytes are disjoint: hosted-v1.1 always signs a degraded key, hosted-v1.0 never does). Neither legacy entry signs schema_version, so stripping it from a hosted-v1.2 receipt makes the signature fail rather than verify as an older version. Field semantics are omit-when-absent: a field missing or null is left out of the canonical bytes, except required_fields (missing fails). degraded_rule: 'unsigned' = never signed; 'absent-is-false' = always signed as a boolean, absent signs false; 'required' = always signed as a boolean, absent fails. hosted-v1.0 and hosted-v1.1 are canonical-receipt-fields.json version 1 (that file is unchanged and still vendored as-is). Vendored by synoi-gateway src/receipt-version.ts and synoi-verify src/receipt-versions.ts, each with a drift test; synoi-control src/receipts/verify-signature.ts vendors the hosted-v1.2 additions. Read at TEST time only. Do not change a list here without updating every vendored copy in the same change.",
+  "$comment": "Hosted (flat) SynOI Decision Receipt versions: the exact signed-field list of each version, keyed by version, plus the hosted-v1.2 degraded_reason codes and integrity_grade enum. A verifier checks each receipt against exactly ONE entry: a receipt carrying schema_version uses the entry whose schema_version equals it, and an unknown value fails closed; a receipt without schema_version is unversioned legacy and tries unversioned_order (their canonical bytes are disjoint: hosted-v1.1 always signs a degraded key, hosted-v1.0 never does). Neither legacy entry signs schema_version, so stripping it from a hosted-v1.2 receipt makes the signature fail rather than verify as an older version. Field semantics are omit-when-absent: a field missing or null is left out of the canonical bytes, except required_fields (missing fails). degraded_rule: 'unsigned' = never signed; 'absent-is-false' = always signed as a boolean, absent signs false; 'required' = always signed as a boolean, absent fails. hosted-v1.0 and hosted-v1.1 are canonical-receipt-fields.json version 1 (that file is unchanged and still vendored as-is). Vendored by synoi-gateway src/receipt-version.ts and synoi-verify src/receipt-versions.ts, each with a drift test; synoi-control src/receipts/verify-signature.ts vendors the hosted-v1.2 additions. Read at TEST time only. Do not change a list here without updating every vendored copy in the same change. F2 (2026-10-31): six degraded_reason codes (trust_token_unverified folded into trust_token_absent, before any hosted-v1.2 receipt was in production), and hosted-v1.3: the hosted-v1.2 field set with grant_oid REQUIRED, emitted for receipts that carry a capability grant (A2A delegation); grant_oid stays optional in every earlier version.",
   "format_version": 1,
   "family": "hosted-flat",
   "canonicalization": "The present, non-null signed fields as one JSON object, keys sorted, no whitespace, scalar values only (RFC 8785 JCS over scalars). degraded is a boolean.",
@@ -123,6 +123,56 @@
         "agent_id": "Reserved for the agent registry. Absent when the gateway does not know the agent; signed when present. Non-empty string.",
         "owner_oid": "Reserved for the agent registry: the agent's owner OID. Absent when unknown; signed when present. Non-empty string."
       }
+    },
+    {
+      "id": "hosted-v1.3",
+      "schema_version": "hosted-v1.3",
+      "status": "current",
+      "degraded_rule": "required",
+      "required_fields": [
+        "action_class",
+        "decision",
+        "degraded",
+        "grant_oid",
+        "integrity_grade",
+        "oid_hex",
+        "receipt_id",
+        "recorded_at",
+        "risk_level",
+        "schema_version",
+        "tenant_id"
+      ],
+      "optional_fields": [
+        "action_payload_hash",
+        "agent_id",
+        "approver_ref",
+        "cited_oracle_inputs",
+        "decision_subject_oid",
+        "degraded_reason",
+        "gateway_manifest_sha256",
+        "intent_oid",
+        "owner_oid",
+        "policy_versions",
+        "prev",
+        "replayed_after",
+        "rule_id",
+        "sequence",
+        "session_id",
+        "state_sha256",
+        "status",
+        "subject_oid",
+        "target_class",
+        "target_id"
+      ],
+      "field_notes": {
+        "schema_version": "Always the string \"hosted-v1.3\".",
+        "grant_oid": "Required: the OID of the capability grant the decision was made under (for an A2A delegation, the minted child grant). Non-empty string. A receipt without a grant is hosted-v1.2.",
+        "degraded": "As hosted-v1.2.",
+        "integrity_grade": "As hosted-v1.2.",
+        "degraded_reason": "As hosted-v1.2.",
+        "agent_id": "As hosted-v1.2.",
+        "owner_oid": "As hosted-v1.2."
+      }
     }
   ],
   "unversioned_order": [
@@ -147,7 +197,6 @@
     "resilience_fallback": "D",
     "trust_token_absent": "B",
     "trust_token_expired": "B",
-    "trust_token_flagged": "C",
-    "trust_token_unverified": "B"
+    "trust_token_flagged": "C"
   }
 }
