@@ -19,6 +19,7 @@ export {
   HOSTED_V1_2_SCHEMA_VERSION,
   DEGRADED_REASON_CODES,
   INTEGRITY_GRADES,
+  AGENT_REGISTRY_FIELDS,
   type ReceiptVersionEntry,
   type HostedFlatVersionEntry,
   type GapCdroVersionEntry,

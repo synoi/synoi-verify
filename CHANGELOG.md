@@ -38,6 +38,16 @@
 - Removed before release: `canonicalPayloadForms` and `CanonicalFormCandidate`
   (the two-form guesser this registry replaces). Both were added earlier in
   this unreleased 0.3.1 and never published.
+- **`hosted-v1.2` is now `current`** and the gateway emits it. `hosted-v1.1`
+  is now `legacy`. This supersedes the "proposed" wording above. `hosted-v1.2`
+  reserves two optional signed fields for the agent registry, `agent_id` and
+  `owner_oid`: absent or null when unknown, signed when present, and required
+  to be non-empty strings when present. An unversioned receipt that displays
+  either one gets `UNSIGNED_FIELD`. New export: `AGENT_REGISTRY_FIELDS`.
+- `vectors/receipt-versions.json`: verbatim copy of synoi-gap
+  `schemas/receipt-versions.json`. A drift test checks the registry's lists,
+  reason codes and grades against it, and against the synoi-gap checkout
+  (`SYNOI_GAP_DIR`) when one is present.
 
 - `VerifyResult.form` (`'current' | 'legacy-without-degraded'`),
   `VerifyResult.signed_fields`, and `VerifyResult.unsigned_canonical_fields`

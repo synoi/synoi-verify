@@ -38,7 +38,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "tsx test/verify.test.ts && tsx test/hosted-canonical-fields.test.ts && tsx test/unsigned-degraded-warning.test.ts && tsx test/receipt-version-registry.test.ts &&tsx test/canonical-parity.test.ts &&tsx test/selftest.test.ts && tsx test/verify-v2.test.ts && tsx test/verify-gap-selfsign.test.ts && tsx test/verify-by-scheme.test.ts && tsx test/merkle.test.ts && tsx test/countersign.test.ts && tsx test/recipe.test.ts && tsx test/fetch.test.ts && tsx test/replay-chain.test.ts && tsx test/source-cursor-render.test.ts && tsx test/cited-oracle-render.test.ts && tsx test/dual-signer-oid.test.ts && tsx test/bundle.test.ts && tsx test/browser-entry.test.ts && tsx test/browser-v2.test.ts",
+    "test": "tsx test/verify.test.ts && tsx test/hosted-canonical-fields.test.ts && tsx test/unsigned-degraded-warning.test.ts && tsx test/receipt-version-registry.test.ts && tsx test/receipt-version-v1-2.test.ts &&tsx test/canonical-parity.test.ts &&tsx test/selftest.test.ts && tsx test/verify-v2.test.ts && tsx test/verify-gap-selfsign.test.ts && tsx test/verify-by-scheme.test.ts && tsx test/merkle.test.ts && tsx test/countersign.test.ts && tsx test/recipe.test.ts && tsx test/fetch.test.ts && tsx test/replay-chain.test.ts && tsx test/source-cursor-render.test.ts && tsx test/cited-oracle-render.test.ts && tsx test/dual-signer-oid.test.ts && tsx test/bundle.test.ts && tsx test/browser-entry.test.ts && tsx test/browser-v2.test.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build && npm test"
   },
