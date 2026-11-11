@@ -92,3 +92,20 @@
   `HOSTED_V1_3_SCHEMA_VERSION`. `hosted-v1.2` stays `current`, for receipts
   without a grant. Older versions are unchanged.
 - `vectors/receipt-versions.json` is re-copied from synoi-gap.
+
+### C1 (2026-11-01, still 0.3.1, unreleased)
+
+- New registry entry `hosted-v1.4` (`current`), the approver-bound receipt:
+  the hosted-v1.3 field list plus `approver_oid`, which is required. It must
+  be an enrolled operator OID (`oid-` + 64 lowercase hex), the identity
+  `owner_oid` uses. `grant_oid` is optional again (ASSUMED). New exports:
+  `HOSTED_V1_4_SCHEMA_VERSION`, `OPERATOR_OID_RE`, `REFUSED_WHEN_UNSIGNED`.
+- `approver_oid` is refused when unsigned: a receipt that carries it under
+  `hosted-v1.0` to `hosted-v1.3` fails verification. It does not get an
+  `UNSIGNED_FIELD` warning, because those versions cannot sign it. Older
+  receipts without `approver_oid` verify exactly as before.
+- Version names: results name the version that verified by its registry id
+  (`version`: `hosted-v1.0` to `hosted-v1.4`). `form` (`current` /
+  `legacy-without-degraded`) is kept read-only on the two unversioned ids, for
+  existing callers; it gains no new values.
+- `vectors/receipt-versions.json` is re-copied from synoi-gap.

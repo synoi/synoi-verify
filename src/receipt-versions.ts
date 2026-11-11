@@ -129,6 +129,28 @@ export const DEGRADED_REASON_CODES: Readonly<Record<string, Exclude<IntegrityGra
 export const HOSTED_V1_3_SCHEMA_VERSION = 'hosted-v1.3' as const
 
 /**
+ * C1: the `schema_version` of an approver-bound receipt. hosted-v1.4 signs the
+ * hosted-v1.3 field list plus `approver_oid`, REQUIRED: the enrolled operator
+ * OID ("oid-" + 64 lowercase hex, the identity owner_oid uses) of the human
+ * who made the approval decision the receipt records. ASSUMED: grant_oid is
+ * optional here (signed when present), as in hosted-v1.2.
+ */
+export const HOSTED_V1_4_SCHEMA_VERSION = 'hosted-v1.4' as const
+
+/** An enrolled operator OID: what hosted-v1.4 `approver_oid` must be. */
+export const OPERATOR_OID_RE = /^oid-[0-9a-f]{64}$/
+
+/**
+ * Fields that are REFUSED, not displayed with a warning, when a receipt
+ * carries them under a version that does not sign them. Showing a human
+ * approver next to `valid: true` when the signature does not cover it would
+ * accept a field set the signature did not cover (rule 14). The older
+ * display-only fields (UNSIGNED_FIELD) keep their warning for backwards
+ * compatibility; approver_oid has never been displayed unsigned.
+ */
+export const REFUSED_WHEN_UNSIGNED = ['approver_oid'] as const
+
+/**
  * Optional hosted-v1.2 fields reserved for the agent registry: signed when
  * present, absent (or null) when the gateway does not know the agent.
  */
@@ -186,7 +208,7 @@ export interface GapCdroVersionEntry extends VersionEntryBase {
 }
 
 export type ReceiptVersionEntry = HostedFlatVersionEntry | GapCdroVersionEntry
-export type HostedVersionId = 'hosted-v1.0' | 'hosted-v1.1' | 'hosted-v1.2' | 'hosted-v1.3'
+export type HostedVersionId = 'hosted-v1.0' | 'hosted-v1.1' | 'hosted-v1.2' | 'hosted-v1.3' | 'hosted-v1.4'
 
 const OPTIONAL_WITHOUT_DEGRADED = OPTIONAL_FIELDS.filter((f) => f !== 'degraded')
 const FLAT_CANON = 'flat-scalar-jcs: JCS over the present, non-null signed fields, keys sorted, scalars only'
@@ -263,6 +285,24 @@ export const RECEIPT_VERSION_REGISTRY: readonly ReceiptVersionEntry[] = Object.f
       'Grant-bound hosted receipt (F2): the hosted-v1.2 field set and value rules, with grant_oid ' +
       'required. What synoi-gateway emits for a receipt that carries a capability grant (A2A ' +
       'delegation); receipts without a grant stay hosted-v1.2.',
+  },
+  {
+    id:                'hosted-v1.4',
+    family:            'hosted-flat',
+    schema_version:    HOSTED_V1_4_SCHEMA_VERSION,
+    status:            'current',
+    required_fields:   [...LEGACY_REQUIRED_FIELDS, 'approver_oid', 'degraded', 'integrity_grade', 'schema_version'],
+    optional_fields:   [...OPTIONAL_WITHOUT_DEGRADED, 'degraded_reason', 'agent_id', 'owner_oid'],
+    degraded_rule:     'required',
+    display_unsigned:  [],
+    canonicalization:  FLAT_CANON,
+    signature_schemes: FLAT_SIGS,
+    warnings:          [],
+    description:
+      'Approver-bound hosted receipt (C1): the hosted-v1.3 field list plus approver_oid, required: ' +
+      'the enrolled operator OID of the human who made the approval decision the receipt records ' +
+      '(Desk spec v1 section 9). grant_oid is optional (ASSUMED). Receipts without an identified ' +
+      'human approver keep their earlier version.',
   },
   {
     id:                'gap-v2-dsse',
@@ -370,6 +410,15 @@ export function canonicalForEntry(
   const obj: Record<string, unknown> = {}
   const required = new Set(entry.required_fields)
   const fields = [...entry.required_fields, ...entry.optional_fields].sort()
+  // C1: refuse, do not merely warn about, an approver this version cannot sign.
+  for (const f of REFUSED_WHEN_UNSIGNED) {
+    if (payload[f] !== undefined && payload[f] !== null && !fields.includes(f)) {
+      throw new Error(
+        `${entry.id}: receipt carries ${f} ${JSON.stringify(payload[f])}, which ${entry.id} does not sign; ` +
+          `refused (a receipt naming a signed human approver is ${HOSTED_V1_4_SCHEMA_VERSION})`,
+      )
+    }
+  }
   for (const key of fields) {
     let val = payload[key]
     if (key === 'degraded') val = signedDegraded(val, entry.degraded_rule, entry.id)
@@ -416,14 +465,22 @@ export function warningsForEntry(payload: Record<string, unknown>, entry: Hosted
  *   - degraded_reason is a sorted, comma-joined list of distinct known codes
  *   - integrity_grade is A when not degraded, else the worst grade of the codes
  * hosted-v1.3 has the same rules, and its grant_oid must be a non-empty string.
+ * hosted-v1.4 has the same rules as hosted-v1.2, and its approver_oid must be
+ * an enrolled operator OID ("oid-" + 64 lowercase hex).
  * Returns a reason string on the first violation, or null.
  */
 export function checkVersionSemantics(payload: Record<string, unknown>, entry: HostedFlatVersionEntry): string | null {
-  if (entry.id !== 'hosted-v1.2' && entry.id !== 'hosted-v1.3') return null
+  if (entry.id !== 'hosted-v1.2' && entry.id !== 'hosted-v1.3' && entry.id !== 'hosted-v1.4') return null
   if (entry.id === 'hosted-v1.3') {
     const g = payload['grant_oid']
     if (typeof g !== 'string' || g === '') {
       return `${entry.id}: grant_oid must be a non-empty string; got ${JSON.stringify(g)}`
+    }
+  }
+  if (entry.id === 'hosted-v1.4') {
+    const a = payload['approver_oid']
+    if (typeof a !== 'string' || !OPERATOR_OID_RE.test(a)) {
+      return `${entry.id}: approver_oid must be an operator OID ("oid-" + 64 lowercase hex); got ${JSON.stringify(a)}`
     }
   }
   // Agent registry fields: absent/null = unknown; when present, a non-empty string.
