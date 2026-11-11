@@ -80,3 +80,15 @@
   required fields).
 - `canonicalPayload` now projects all 26 fields under omit-when-absent.
   Receipts that carry none of the newer fields produce the same bytes as before.
+
+### F2 (2026-10-31, still 0.3.1, unreleased)
+
+- `DEGRADED_REASON_CODES` has six codes: `trust_token_unverified` is folded
+  into `trust_token_absent` (grade B). This is a change to unreleased
+  hosted-v1.2 vocabulary, not a new version.
+- New registry entry `hosted-v1.3` (`current`): the hosted-v1.2 field set and
+  value rules, with `grant_oid` required (a non-empty string). It is used for
+  grant-bound receipts (A2A delegation). New export:
+  `HOSTED_V1_3_SCHEMA_VERSION`. `hosted-v1.2` stays `current`, for receipts
+  without a grant. Older versions are unchanged.
+- `vectors/receipt-versions.json` is re-copied from synoi-gap.
