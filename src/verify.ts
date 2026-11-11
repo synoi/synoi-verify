@@ -26,8 +26,13 @@
 
 import { verify, createPublicKey } from 'node:crypto'
 import {
-  canonicalPayload,
+  canonicalForEntry,
+  checkVersionSemantics,
   createVerifyReceiptByScheme,
+  jcsCanonicalize,
+  resolveHostedVersions,
+  warningsForEntry,
+  type VersionCanonical,
   V2_PAYLOAD_TYPE,
   type VerifyResult,
   type VerifyResultV2,
@@ -104,10 +109,24 @@ export function verifyEd25519Raw(
  * @param signatureHex  64-byte Ed25519 signature, hex-encoded
  * @param publicKeyPem  the gateway's public key in PEM/SPKI format
  *
- * Returns `{ valid: true }` on a verified signature, or
- * `{ valid: false, reason: '...' }` on any failure. Never throws.
+ * The registry (./receipt-versions) picks what to check, never field subsets:
+ *   - `schema_version` present: ONLY that version's entry. An unknown value
+ *     fails closed with an `unknown-schema-version` reason, before any
+ *     signature check.
+ *   - `schema_version` absent or null: the unversioned legacy entries,
+ *     hosted-v1.1 then hosted-v1.0, whose bytes are disjoint by construction.
+ * A versioned entry's value rules (checkVersionSemantics) must hold as well.
  *
- * NODE-ONLY: uses node:crypto. This is the v1 legacy path. Browser bundles use
+ * On success the result carries `version`, `signed_fields`, `warnings` (the
+ * entry's display-only fields the receipt carries, empty otherwise),
+ * `unsigned_canonical_fields` when there are any, and `form` for the two
+ * unversioned entries.
+ *
+ * Returns `{ valid: true }` on a verified signature, or
+ * `{ valid: false, reason: '...' }` on any failure (with the first candidate's
+ * canonical_payload when it could be built). Never throws.
+ *
+ * NODE-ONLY: uses node:crypto. This is the v1 (flat) path. Browser bundles use
  * @synoi/verify/browser, which does not include this function.
  */
 export function verifyReceiptSignature(
@@ -115,18 +134,49 @@ export function verifyReceiptSignature(
   signatureHex:  string,
   publicKeyPem:  string,
 ): VerifyResult {
-  let canonical: string
-  try {
-    canonical = canonicalPayload(payload)
-  } catch (err) {
+  const fail = (reason: string, canonical = ''): VerifyResult =>
+    ({ valid: false, canonical_payload: canonical, algorithm: 'Ed25519', reason })
+
+  const resolved = resolveHostedVersions(payload)
+  if (!resolved.ok) return fail(resolved.reason)
+
+  const failures: string[] = []
+  let firstCanonical = ''
+  for (const entry of resolved.entries) {
+    let c: VersionCanonical
+    try {
+      c = canonicalForEntry(payload, entry, jcsCanonicalize)
+    } catch (err) {
+      failures.push((err as Error).message)
+      continue
+    }
+    firstCanonical ||= c.canonical_payload
+    const semantic = checkVersionSemantics(payload, entry)
+    if (semantic !== null) {
+      failures.push(semantic)
+      continue
+    }
+    const res = verifyEd25519Raw(c.canonical_payload, signatureHex, publicKeyPem)
+    if (!res.valid) {
+      failures.push(`${entry.id}: ${res.reason ?? 'signature invalid'}`)
+      continue
+    }
     return {
-      valid:             false,
-      canonical_payload: '',
-      algorithm:         'Ed25519',
-      reason:            (err as Error).message,
+      ...res,
+      version:       entry.id,
+      ...(entry.form !== undefined ? { form: entry.form } : {}),
+      signed_fields: c.signed_fields,
+      ...(c.unsigned_canonical_fields.length > 0
+        ? { unsigned_canonical_fields: c.unsigned_canonical_fields }
+        : {}),
+      warnings:      warningsForEntry(payload, entry),
     }
   }
-  return verifyEd25519Raw(canonical, signatureHex, publicKeyPem)
+  // One candidate: its own reason. Two (unversioned): say that neither matched.
+  return fail(
+    failures.length === 1 ? failures[0]! : `matches no unversioned legacy entry: ${failures.join('; ')}`,
+    firstCanonical,
+  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
